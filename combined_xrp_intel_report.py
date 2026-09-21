@@ -1237,8 +1237,34 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     )
     embed.set_footer(text=f"Crypto Intelligence • {now_est.strftime('%I:%M %p %Z')}")
     embed.set_timestamp()
+
+    # ── Discord chart attachment ──
+    # Reuse the existing 2x2 chart builder, but attach the resulting image
+    # directly to the Discord report. This keeps the chart independent of X/Twitter.
+    discord_chart_path = build_tweet_chart_image(coin, df_daily, df_4h, hourly, df_15m)
+    chart_file = None
+    if discord_chart_path and os.path.exists(discord_chart_path):
+        chart_filename = os.path.basename(discord_chart_path)
+        try:
+            embed.set_image(url=f"attachment://{chart_filename}")
+            chart_file = open(discord_chart_path, "rb")
+            webhook.add_file(file=chart_file, filename=chart_filename)
+            print(f"✓ {coin}: Discord chart prepared → {chart_filename}")
+        except Exception as e:
+            if chart_file:
+                try:
+                    chart_file.close()
+                except Exception:
+                    pass
+            chart_file = None
+            print(f"⚠️  {coin}: Discord chart attachment failed → {e}")
+
     webhook.add_embed(embed)
-    resp            = webhook.execute()
+    try:
+        resp = webhook.execute()
+    finally:
+        if chart_file:
+            chart_file.close()
     discord_success = hasattr(resp, "status_code") and 200 <= resp.status_code < 300
     if discord_success:
         print(f"✓ {coin}: Discord report sent")
