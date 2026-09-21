@@ -1,4 +1,3 @@
-# path: combined_xrp_intel_report.py
 #!/usr/bin/env python3
 """
 combined_xrp_intel_report.py
@@ -29,6 +28,13 @@ Fixes in the 2026-09 repair pass:
 - News coin matching uses word boundaries ("sol" no longer matches "solution").
 - Discord webhooks retry on 429; CryptoCompare calls accept CRYPTOCOMPARE_API_KEY and retry.
 - X posts fall back to text-only if media upload fails; length uses X's weighted counting.
+
+2026-09 scoring / outlook pass:
+- Position confidence is dominated by Daily + 4H structure, not RSI/BB.
+- Ranging/choppy higher timeframes cap Position confidence.
+- Scalper confidence weights 1H > 15m > 5m and cannot go extreme unless all 3 agree.
+- RSI 70+ is labeled Overbought / Extended, not Sell.
+- Reports include Position Outlook and Scalper Outlook condition labels.
 """
 
 from __future__ import annotations
@@ -68,7 +74,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "surge_cooldown_hours": 2,
     "history_max_rows": 10000,
     "post_reports_to_x": True,
-    # FIX: was False — manual dispatch now also posts to X
     "tweet_on_force": True,
     "tweet_report_symbols": ["XRP", "BTC"],
     "news_pages_max": 6,
@@ -193,12 +198,6 @@ def _ensure(root: dict, *keys: str, default: dict | list | None = None) -> dict:
 
 
 def _sanitize_state(st: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Migrate old last_alert.json layouts. Older versions stored dicts/lists inside
-    news_posted (per-coin ID lists, dates, 'roll24'); the current code expects
-    {url: iso_timestamp}. Mixed types made the prune step raise TypeError, so the
-    file grew forever. Keep only str->str entries and drop dead legacy keys.
-    """
     st = dict(st or {})
     posted = st.get("news_posted")
     if isinstance(posted, dict):
@@ -212,7 +211,6 @@ def _sanitize_state(st: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _load_surge_state(legacy: Dict[str, Any]) -> Dict[str, Any]:
-    """Surge cooldown timestamps. Seeds from legacy '<COIN>_last_surge' keys once."""
     surge: Dict[str, Any] = {}
     if os.path.exists(SURGE_STATE_FILE):
         try:
@@ -295,7 +293,6 @@ _HIST_COLS   = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 def _read_history_csv(file_path: str) -> pd.DataFrame:
-    """Read a history CSV, skipping git merge-conflict marker lines and malformed rows."""
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         lines = [ln for ln in f if not _CONFLICT_RE.match(ln)]
     return pd.read_csv(StringIO("".join(lines)), on_bad_lines="skip")
@@ -330,7 +327,6 @@ def safe_load_history(coin: str) -> pd.DataFrame:
         df = df.dropna(subset=["close"])
         return df.sort_values("timestamp").drop_duplicates("timestamp")
     except Exception as e:
-        # Never wipe history on a read error: keep a backup and continue with an empty frame.
         print(f"⚠️  {coin}: CSV load error ({e}) → continuing without local history")
         _backup_corrupt(file_path)
         return empty
@@ -377,12 +373,6 @@ def _cc_to_ohlcv_df(data_points: List[dict]) -> pd.DataFrame:
 # ──────────────────────────────────────────────
 
 def _cc_get(url: str, params: Dict[str, Any], timeout: int = 20, tries: int = 3) -> requests.Response:
-    """
-    GET a CryptoCompare endpoint. Uses CRYPTOCOMPARE_API_KEY if set (keyless traffic from
-    shared GitHub runner IPs gets throttled hard) and retries 429/5xx with backoff.
-    CryptoCompare also returns HTTP 200 with {"Response":"Error"} for rate limits, so callers
-    must still check the payload.
-    """
     headers = {}
     key = os.getenv("CRYPTOCOMPARE_API_KEY", "").strip()
     if key:
@@ -410,7 +400,6 @@ def _cc_points(r: requests.Response) -> List[dict]:
 
 
 def _fetch_histohour_raw(coin: str, limit: int = 2000) -> List[dict]:
-    """Try USDT first, fall back to USD if empty — fixes ADA and other coins."""
     for tsym in ("USDT", "USD"):
         try:
             r = _cc_get(CRYPTOCOMPARE_HISTOHOUR, {"fsym": coin, "tsym": tsym, "limit": limit})
@@ -463,11 +452,6 @@ def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame
 
 
 def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
-    """Fetch the current spot price directly from CryptoCompare.
-
-    This is intentionally separate from candle data so the Discord report's
-    displayed price is live rather than the last completed 4H candle close.
-    """
     try:
         r = _cc_get(CRYPTOCOMPARE_PRICE, {"fsym": coin, "tsyms": tsym})
         payload = r.json()
@@ -502,7 +486,6 @@ def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT")
 # News fetching & posting
 # ──────────────────────────────────────────────
 
-# RSS feeds from allowlisted crypto news sources — no API key needed
 NEWS_RSS_FEEDS = [
     ("CoinDesk",         "https://www.coindesk.com/arc/outboundfeeds/rss/",  "coindesk.com"),
     ("CoinTelegraph",    "https://cointelegraph.com/rss",                     "cointelegraph.com"),
@@ -516,7 +499,6 @@ NEWS_RSS_FEEDS = [
     ("The Block",        "https://www.theblock.co/rss.xml",                   "theblock.co"),
 ]
 
-# Keywords to match each coin in article titles/descriptions
 COIN_KEYWORDS: Dict[str, List[str]] = {
     "XRP":  ["xrp", "ripple"],
     "BTC":  ["bitcoin", "btc"],
@@ -529,9 +511,7 @@ COIN_KEYWORDS: Dict[str, List[str]] = {
 
 
 def _parse_rss(xml_text: str, source_name: str, source_domain: str) -> List[dict]:
-    """Parse RSS/Atom XML into a list of article dicts."""
     import xml.etree.ElementTree as ET
-    import re
     from email.utils import parsedate_to_datetime
 
     articles = []
@@ -539,19 +519,16 @@ def _parse_rss(xml_text: str, source_name: str, source_domain: str) -> List[dict
         root = ET.fromstring(xml_text)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
 
-        # Handle both RSS <item> and Atom <entry>
         items = root.findall(".//item")
         if not items:
             items = root.findall(".//atom:entry", ns)
 
         def _get_text(el_or_none) -> str:
-            """Safe text extraction — avoids the Element truth-value bug."""
             if el_or_none is None:
                 return ""
             return (el_or_none.text or "").strip()
 
         def _find(item, rss_tag: str, atom_tag: str = "") -> str:
-            """Find a tag by RSS name first, then Atom namespace."""
             el = item.find(rss_tag)
             if el is not None:
                 return _get_text(el)
@@ -565,13 +542,11 @@ def _parse_rss(xml_text: str, source_name: str, source_domain: str) -> List[dict
             title = _find(item, "title")
             url   = _find(item, "link")
 
-            # Atom feeds put the URL in <link href="..."/> attribute, not text
             if not url:
                 link_el = item.find("atom:link", ns)
                 if link_el is not None:
                     url = link_el.attrib.get("href", "")
 
-            # Some RSS feeds use <link> as an empty tag with text in the tail
             if not url:
                 link_el = item.find("link")
                 if link_el is not None and link_el.tail:
@@ -606,11 +581,6 @@ def _parse_rss(xml_text: str, source_name: str, source_domain: str) -> List[dict
 
 
 def _coin_match(article: dict, coins: List[str]) -> str:
-    """
-    Return the first coin whose keywords appear in title+body, else 'GENERAL'.
-    Whole-word match: plain substring matching tagged 'solution' as SOL, 'method' as ETH,
-    'Canada' as ADA, etc., which also burned the per-coin caps on junk.
-    """
     text = (article.get("title", "") + " " + article.get("body", "")).lower()
     for coin in coins:
         for kw in COIN_KEYWORDS.get(coin, [coin.lower()]):
@@ -620,10 +590,6 @@ def _coin_match(article: dict, coins: List[str]) -> str:
 
 
 def fetch_news(coins: List[str]) -> List[dict]:
-    """
-    Fetch crypto news from RSS feeds of allowlisted sources.
-    No API key required. Deduplicates against previously posted URLs.
-    """
     allowlist    = {d.lower() for d in config.get("news_allowlist_domains", [])}
     max_per_coin = int(config.get("news_max_per_coin", 5))
     global_cap   = int(config.get("news_global_cap", 45))
@@ -638,7 +604,6 @@ def fetch_news(coins: List[str]) -> List[dict]:
     for source_name, feed_url, domain in NEWS_RSS_FEEDS:
         if len(collected) >= global_cap:
             break
-        # Skip if domain not in allowlist (when allowlist is configured)
         if allowlist and domain not in allowlist:
             continue
         try:
@@ -656,7 +621,6 @@ def fetch_news(coins: List[str]) -> List[dict]:
                     seen_urls.add(url)
                     continue
                 coin_tag = _coin_match(art, coins)
-                # Apply per-coin cap (GENERAL gets global_cap as its cap)
                 cap = max_per_coin if coin_tag != "GENERAL" else global_cap
                 if coin_counts.get(coin_tag, 0) >= cap:
                     continue
@@ -691,7 +655,6 @@ def _news_already_posted(url: str) -> bool:
 def _mark_news_posted(url: str) -> None:
     _ensure(state, "news_posted", default={})
     state["news_posted"][url] = now_est.isoformat()
-    # Prune old entries (keep last 500)
     posted = state["news_posted"]
     if len(posted) > 500:
         oldest_keys = sorted(posted, key=lambda k: str(posted[k]))[:len(posted) - 500]
@@ -700,7 +663,6 @@ def _mark_news_posted(url: str) -> None:
 
 
 def post_news_to_discord(articles: List[dict]) -> int:
-    """Post new articles to DISCORD_WEBHOOK_NEWS. Returns count posted."""
     webhook_url = os.getenv("DISCORD_WEBHOOK_NEWS")
     if not webhook_url:
         print("⚠️  DISCORD_WEBHOOK_NEWS not set — skipping news post")
@@ -719,9 +681,7 @@ def post_news_to_discord(articles: List[dict]) -> int:
         coin_tag   = art.get("_matched_coin", "CRYPTO")
         img_url    = art.get("imageurl", "")
 
-        # Coin color for embed
         color = COINS.get(coin_tag, {}).get("color", 0x7289DA)
-
         pub_dt = datetime.fromtimestamp(pub_ts, tz=timezone.utc) if pub_ts else now_est
 
         webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
@@ -781,11 +741,6 @@ def market_structure(df: pd.DataFrame, timeframe: str) -> str:
 
 
 def _rsi_from_close(close: pd.Series, period: int = 14) -> pd.Series:
-    """
-    Same simple-average RSI as before, but correct at the edges. The old
-    gain / loss.replace(0, inf) made RSI = 0 (OVERSOLD/"Buy") when there were no down
-    bars at all; it should be 100. No movement at all -> 50.
-    """
     delta = close.diff()
     gain  = delta.clip(lower=0).rolling(period).mean()
     loss  = (-delta.clip(upper=0)).rolling(period).mean()
@@ -802,13 +757,7 @@ def calculate_rsi(df_4h: pd.DataFrame) -> Tuple[int, str]:
         return 50, "No Data"
     try:
         rsi_val  = int(_rsi_from_close(df_4h["close"], 14).iloc[-1])
-        if rsi_val >= 70:
-            signal = "OVERBOUGHT"
-        elif rsi_val <= 30:
-            signal = "OVERSOLD"
-        else:
-            signal = "NEUTRAL"
-        return rsi_val, f"{rsi_val} → {signal}"
+        return rsi_val, f"{rsi_val} → {rsi_stance(rsi_val)}"
     except Exception:
         return 50, "Error"
 
@@ -825,7 +774,7 @@ def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
     latest  = df.iloc[-1]
     prev    = df.iloc[-2]
     dist_raw = float(latest["distance_from_lower"])
-    dist_pct = round(dist_raw * 100, 2) if np.isfinite(dist_raw) else 50.0  # flat bands -> neutral
+    dist_pct = round(dist_raw * 100, 2) if np.isfinite(dist_raw) else 50.0
 
     squeeze = "No Data"
     if len(df) >= 100:
@@ -847,14 +796,11 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
     """
     Higher-timeframe position confidence.
 
-    This is a directional confidence score, NOT a calibrated probability.
-    Daily and 4H structure are deliberately dominant. RSI and Bollinger
-    position are supporting evidence only, and a ranging/choppy structure
-    prevents the score from becoming artificially extreme.
+    Daily and 4H structure dominate. RSI and Bollinger are supporting evidence.
+    Two ranging/choppy higher timeframes prevent an extreme score.
     """
     score = 50.0
 
-    # Structure is the primary signal.
     if "Bullish" in daily_struct:
         score += 18
     elif "Bearish" in daily_struct:
@@ -865,15 +811,12 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
     elif "Bearish" in h4_struct:
         score -= 15
 
-    # Ranging/choppy means the market has not established a directional
-    # structure. Do not let momentum indicators overwhelm that fact.
     ranging_count = sum("Ranging/Choppy" in s for s in (daily_struct, h4_struct))
     if ranging_count == 2:
         score = min(score, 65.0)
     elif ranging_count == 1:
         score = min(score, 78.0)
 
-    # RSI is supporting evidence, not the main driver.
     if 52 <= rsi_val <= 68:
         score += 4
     elif 68 < rsi_val <= 75:
@@ -883,10 +826,8 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
     elif 32 <= rsi_val < 48:
         score -= 2
     elif rsi_val < 32:
-        score += 2  # Oversold can support a rebound, but is not a trend signal.
+        score += 2
 
-    # Bollinger position is context. Extreme extension slightly reduces
-    # continuation confidence; it does not automatically imply reversal.
     dist = float(bb.get("dist_pct", 50))
     if not np.isfinite(dist):
         dist = 50.0
@@ -895,8 +836,6 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
     elif 55 <= dist <= 80:
         score += 2
 
-    # With both higher timeframes ranging/choppy, keep the output explicitly
-    # in the non-extreme range regardless of indicator alignment.
     if ranging_count == 2:
         score = min(score, 65.0)
 
@@ -909,10 +848,7 @@ def calculate_scalper_confidence(
 ) -> int:
     """
     Short-term directional confidence from 1H/15m/5m EMA alignment.
-
-    1H carries the most weight, followed by 15m and 5m. Neutral alignment
-    contributes no directional points, so 2-of-3 bullish cannot reach the
-    extreme range by itself.
+    1H carries the most weight. Neutral TFs contribute no directional points.
     """
     score = 50.0
 
@@ -925,8 +861,6 @@ def calculate_scalper_confidence(
         elif "BEARISH" in bias:
             score -= weight
 
-    # Momentum is supportive, but overbought/extended conditions reduce
-    # continuation confidence rather than forcing a sell call.
     if 50 <= rsi_val <= 68:
         score += 5
     elif rsi_val > 80:
@@ -942,8 +876,6 @@ def calculate_scalper_confidence(
     elif np.isfinite(dist) and 55 <= dist <= 80:
         score += 2
 
-    # Explicit ceiling: if any scalper timeframe is not bullish, do not
-    # present the setup as near-certain continuation.
     biases = [
         bias_1h.get("bias", ""),
         bias_15m.get("bias", ""),
@@ -962,6 +894,14 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False).mean()
 
 
+def _aligned_bull(row: pd.Series) -> bool:
+    return bool(row["close"] > row["e9"] > row["e21"])
+
+
+def _aligned_bear(row: pd.Series) -> bool:
+    return bool(row["close"] < row["e9"] < row["e21"])
+
+
 def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
     if df is None or len(df) < 21:
         return {"bias": "No Data", "signal": "Need 21+ bars"}
@@ -969,11 +909,128 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
     d["e9"]  = _ema(d["close"], 9)
     d["e21"] = _ema(d["close"], 21)
     last     = d.iloc[-1]
-    if last["close"] > last["e9"] > last["e21"]:
+    prev     = d.iloc[-2] if len(d) >= 22 else last
+
+    if _aligned_bull(last):
         return {"bias": "BULLISH 🔼", "signal": "Price > EMA9 > EMA21"}
-    if last["close"] < last["e9"] < last["e21"]:
+    if _aligned_bear(last):
         return {"bias": "BEARISH 🔽", "signal": "Price < EMA9 < EMA21"}
-    return {"bias": "NEUTRAL ⚪", "signal": "Wait"}
+
+    if _aligned_bull(prev):
+        return {"bias": "NEUTRAL ⚪", "signal": "Confirmation lost"}
+    if _aligned_bear(prev):
+        return {"bias": "NEUTRAL ⚪", "signal": "Short confirmation lost"}
+    if last["close"] > last["e9"]:
+        return {"bias": "NEUTRAL ⚪", "signal": "Above EMA9, waiting on EMA21"}
+    if last["close"] < last["e9"]:
+        return {"bias": "NEUTRAL ⚪", "signal": "Below EMA9, waiting on EMA21"}
+    return {"bias": "NEUTRAL ⚪", "signal": "No EMA alignment"}
+
+
+def _bias_kind(bias: str) -> str:
+    b = bias or ""
+    if "BULLISH" in b:
+        return "BULLISH"
+    if "BEARISH" in b:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def extension_level(rsi_val: int, bb: dict) -> str:
+    dist = float((bb or {}).get("dist_pct", 50) or 50)
+    if not np.isfinite(dist):
+        dist = 50.0
+    if rsi_val >= 75 or dist >= 110 or rsi_val <= 25 or dist <= 0:
+        return "High"
+    if rsi_val >= 70 or dist >= 100 or rsi_val <= 30 or dist <= 10:
+        return "Elevated"
+    return "Normal"
+
+
+def position_outlook(
+    daily_struct: str, h4_struct: str, rsi_val: int, bb: dict, confidence: int,
+) -> Dict[str, Any]:
+    ranging_count = sum("Ranging" in (s or "") or "Choppy" in (s or "") for s in (daily_struct, h4_struct))
+    bull_count = sum("Bullish" in (s or "") for s in (daily_struct, h4_struct))
+    bear_count = sum("Bearish" in (s or "") for s in (daily_struct, h4_struct))
+    ext = extension_level(rsi_val, bb)
+
+    if bull_count == 2:
+        headline, trend, stance = "BULLISH — Daily/4H Aligned", "Confirmed uptrend", "BULLISH"
+        if ext in ("High", "Elevated"):
+            headline = "BULLISH — EXTENDED"
+    elif bear_count == 2:
+        headline, trend, stance = "BEARISH — Daily/4H Aligned", "Confirmed downtrend", "BEARISH"
+        if ext in ("High", "Elevated"):
+            headline = "BEARISH — EXTENDED"
+    elif ranging_count == 2:
+        headline, trend, stance = "NEUTRAL — Daily/4H Range", "Unconfirmed", "NEUTRAL"
+    elif bull_count == 1 or bear_count == 1:
+        headline, trend, stance = "MIXED — Partial Higher-TF Trend", "Partially confirmed", "MIXED"
+    else:
+        headline, trend, stance = "NEUTRAL — No Daily/4H Trend", "Unconfirmed", "NEUTRAL"
+
+    return {
+        "headline": headline,
+        "trend": trend,
+        "extension": ext,
+        "stance": stance,
+        "confidence": confidence,
+    }
+
+
+def scalper_outlook(
+    bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
+    rsi_val: int, bb: dict, confidence: int,
+) -> Dict[str, Any]:
+    k1 = _bias_kind(bias_1h.get("bias", ""))
+    k15 = _bias_kind(bias_15m.get("bias", ""))
+    k5 = _bias_kind(bias_5m.get("bias", ""))
+    ext = extension_level(rsi_val, bb)
+    sig5 = bias_5m.get("signal", k5)
+
+    if k1 == "BULLISH" and k15 == "BULLISH" and k5 == "BULLISH":
+        headline = "BULLISH — ALIGNED"
+        align = "1H/15m/5m: Aligned"
+        five = "Confirmed"
+        if ext in ("High", "Elevated"):
+            headline = "BULLISH — EXTENDED"
+    elif k1 == "BEARISH" and k15 == "BEARISH" and k5 == "BEARISH":
+        headline = "BEARISH — ALIGNED"
+        align = "1H/15m/5m: Aligned"
+        five = "Confirmed"
+        if ext in ("High", "Elevated"):
+            headline = "BEARISH — EXTENDED"
+    elif k1 == "BULLISH" and k15 == "BULLISH":
+        align = "1H/15m: Aligned"
+        five = "Confirmation lost" if k5 != "BULLISH" else "Confirmed"
+        if ext in ("High", "Elevated") and k5 != "BULLISH":
+            headline = "BULLISH — EXTENDED / 5M UNCONFIRMED"
+        elif ext in ("High", "Elevated"):
+            headline = "BULLISH — EXTENDED"
+        else:
+            headline = "BULLISH — 5M UNCONFIRMED"
+    elif k1 == "BEARISH" and k15 == "BEARISH":
+        align = "1H/15m: Aligned"
+        five = "Confirmation lost" if k5 != "BEARISH" else "Confirmed"
+        if ext in ("High", "Elevated") and k5 != "BEARISH":
+            headline = "BEARISH — EXTENDED / 5M UNCONFIRMED"
+        elif ext in ("High", "Elevated"):
+            headline = "BEARISH — EXTENDED"
+        else:
+            headline = "BEARISH — 5M UNCONFIRMED"
+    else:
+        headline = "MIXED — SHORT-TERM"
+        align = f"1H: {k1} • 15m: {k15}"
+        five = sig5 or k5
+
+    return {
+        "headline": headline,
+        "align": align,
+        "five": five,
+        "extension": ext,
+        "confidence": confidence,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -985,11 +1042,6 @@ def check_surge(
     hourly_df: pd.DataFrame,
     minute_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[bool, float, float, str]:
-    """
-    If minute_df (1-min bars covering the last hour) is given, the move is the true
-    60-minute change. Otherwise fall back to the last two hourly closes, which only
-    measures the change since the top of the current hour.
-    """
     if minute_df is not None and len(minute_df) >= 30:
         current_price  = float(minute_df["close"].iloc[-1])
         hour_ago_price = float(minute_df["close"].iloc[0])
@@ -1062,6 +1114,7 @@ def rsi_stance(rsi: int) -> str:
         return "Bearish Momentum"
     return "Neutral"
 
+
 def bb_squeeze_flag(bb: dict) -> str:
     return "On" if (bb or {}).get("squeeze") == "SQUEEZE ACTIVE" else "Off"
 
@@ -1094,7 +1147,6 @@ def _trend_short(struct: str) -> str:
     return "Range"
 
 def _x_weight(ch: str) -> int:
-    """X counts most non-Latin chars and all emoji as 2; Latin-ish ranges as 1."""
     cp = ord(ch)
     if cp <= 4351 or 8192 <= cp <= 8205 or 8208 <= cp <= 8223 or 8242 <= cp <= 8247:
         return 1
@@ -1106,12 +1158,11 @@ def x_length(text: str) -> int:
 
 
 def trim_to_277(text: str) -> str:
-    """Trim to X's 280 weighted limit (277 for headroom), on a line boundary if possible."""
     if x_length(text) <= 277:
         return text
     lines = text.split("\n")
     while len(lines) > 1 and x_length("\n".join(lines)) > 277:
-        lines.pop(-2)  # drop from the middle, keep the hashtag line at the end
+        lines.pop(-2)
     out = "\n".join(lines)
     while x_length(out) > 277:
         out = out[:-1]
@@ -1162,7 +1213,6 @@ def add_indicator_columns(d: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -> str:
-    """Render a dark trading-terminal chart with candles, EMA9/21, Bollinger Bands, volume and RSI."""
     import mplfinance as mpf
 
     mpf_df = add_indicator_columns(_to_mpf(df)).dropna().copy()
@@ -1170,9 +1220,7 @@ def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -
         mpf_df = _to_mpf(df).dropna().copy()
 
     last_price = float(mpf_df["Close"].iloc[-1])
-    price_line = pd.Series(last_price, index=mpf_df.index, name="Price")
 
-    # Dark terminal styling keeps the chart readable when posted to X/Discord.
     style = mpf.make_mpf_style(
         base_mpf_style="nightclouds",
         marketcolors=mpf.make_marketcolors(
@@ -1219,7 +1267,6 @@ def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -
         warn_too_much_data=10000,
     )
 
-    # Label the RSI panel when mplfinance exposes the axes in the expected order.
     try:
         axes[-1].set_ylabel("RSI", color="#e5e7eb")
         axes[-1].set_ylim(0, 100)
@@ -1259,7 +1306,6 @@ def build_discord_chart_images(
     hourly: pd.DataFrame,
     df_15m: pd.DataFrame,
 ) -> List[str]:
-    """Build four separate Discord chart images: Daily, 4H, 1H and 15m."""
     enabled, bars_cfg = get_chart_cfg(coin)
     if not enabled:
         return []
@@ -1345,8 +1391,6 @@ def upload_media_and_tweet(coin: str, text: str, image_path: Optional[str]) -> b
                 media     = twitter_clients.v1.media_upload(filename=image_path)
                 media_ids = [int(media.media_id)]
             except Exception as e:
-                # X has been retiring the v1.1 media upload endpoint. Don't lose the whole
-                # post over the chart: send the text-only tweet instead.
                 print(f"⚠️  {coin}: X media upload failed → posting text-only ({e})")
         resp = twitter_clients.v2.create_tweet(text=text, media_ids=media_ids)
         ok   = bool(resp and getattr(resp, "data", None))
@@ -1367,12 +1411,8 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     if not webhook_url or df_4h is None or df_4h.empty:
         return False
 
-    # Display the current spot price from CryptoCompare instead of the last
-    # completed 4H candle close. Technical indicators continue to use candles.
     live_price = fetch_live_price(coin, "USD")
     price = live_price if live_price is not None else float(df_4h["close"].iloc[-1])
-
-    # Keep the 24H comparison anchored to the hourly candle 24 hours ago.
     change_24h = (price / float(hourly["close"].iloc[-25]) - 1) * 100 if len(hourly) >= 25 else 0.0
 
     bb           = bollinger_analysis(df_4h)
@@ -1381,8 +1421,6 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     h4_struct    = market_structure(df_4h, "4H")
     bias_1h      = run_scalper_ema(hourly)
 
-    # Only request 15m minute data.  The old direct 5m request was the main
-    # CryptoCompare quota hit; derive the 5m signal from the 15m series instead.
     df_15m = fetch_histominute(coin, aggregate=15, limit=int(config.get("histominute_limit_15m", 1200)))
     if df_15m is None:
         df_15m = hourly.resample("15min").ffill().dropna()
@@ -1391,9 +1429,10 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     bias_15m = run_scalper_ema(df_15m)
     bias_5m  = run_scalper_ema(df_5m)
 
-    # Separate the higher-timeframe position view from the short-term scalper view.
     position_confidence = calculate_market_confidence(bb, rsi_val, daily_struct, h4_struct)
     scalper_confidence  = calculate_scalper_confidence(bias_1h, bias_15m, bias_5m, rsi_val, bb)
+    pos_out = position_outlook(daily_struct, h4_struct, rsi_val, bb, position_confidence)
+    scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_val, bb, scalper_confidence)
 
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
     embed   = DiscordEmbed(title=f"{coin} Market Report", color=COINS[coin]["color"])
@@ -1403,13 +1442,24 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="📈 Volatility", value=f"BB Pos: {bb['dist_pct']:.1f}%\n{bb['squeeze']}\n{bb['breakout']}", inline=True)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(
-        name="🎯 Position Confidence",
-        value=f"**{position_confidence}%**\nDaily + 4H",
+        name="🎯 Position Outlook",
+        value=(
+            f"**{pos_out['headline']}**\n"
+            f"Confidence: {position_confidence}%\n"
+            f"Trend: {pos_out['trend']}\n"
+            f"Extension: {pos_out['extension']}"
+        ),
         inline=True,
     )
     embed.add_embed_field(
-        name="⚡ Scalper Confidence",
-        value=f"**{scalper_confidence}%**\n1H + 15m + 5m",
+        name="⚡ Scalper Outlook",
+        value=(
+            f"**{scalp_out['headline']}**\n"
+            f"Confidence: {scalper_confidence}%\n"
+            f"{scalp_out['align']}\n"
+            f"5m: {scalp_out['five']}\n"
+            f"Extension: {scalp_out['extension']}"
+        ),
         inline=True,
     )
     embed.add_embed_field(
@@ -1424,9 +1474,6 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.set_footer(text=f"Crypto Intelligence • {now_est.strftime('%I:%M %p %Z')}")
     embed.set_timestamp()
 
-    # ── Discord chart attachments ──
-    # Attach four separate images so Discord displays Daily, 4H, 1H and 15m
-    # as individual clickable images instead of one stitched 2x2 image.
     discord_chart_paths = build_discord_chart_images(coin, df_daily, df_4h, hourly, df_15m)
     chart_files = []
     if discord_chart_paths:
@@ -1456,11 +1503,9 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         status = getattr(resp, "status_code", "?")
         print(f"⚠️  {coin}: Discord report failed (HTTP {status})")
 
-    # ── X / Twitter ──
     twitter_success = False
     tweet_symbols   = {s.upper() for s in (config.get("tweet_report_symbols") or [])}
     if twitter_clients and bool(config.get("post_reports_to_x", True)) and coin.upper() in tweet_symbols:
-        # FIX: tweet_on_force now defaults True, so this block runs on both scheduled and manual
         if os.getenv("FORCE_FULL_REPORT") == "true" and not bool(config.get("tweet_on_force", True)):
             print(f"🛑 {coin}: Skipping X tweet on FORCE (tweet_on_force=False in config)")
         else:
@@ -1470,12 +1515,9 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
                 f"💰 ${price:,.4f} ({change_24h:+.2f}%)\n"
                 f"📐 D:{_trend_short(daily_struct)} • 4H:{_trend_short(h4_struct)}\n"
                 f"RSI {rsi_val} → {rsi_stance(rsi_val)}\n"
-                f"BB {float(bb['dist_pct']):.0f}% → {bb_stance_simple(bb)}\n"
-                f"Sqz:{bb_squeeze_flag(bb)} • BO:{bb_breakout_code(bb)}\n"
-                f"⚡ 1H: {bias_1h['bias']} → {bias_sig(bias_1h['bias'])}\n"
-                f"⚡ 15m: {bias_15m['bias']}  ⚡ 5m: {bias_5m['bias']}\n"
-                f"🎯 Position {position_confidence}% → {prob_stance(position_confidence)}\n"
-                f"⚡ Scalp {scalper_confidence}% → {prob_stance(scalper_confidence)}\n"
+                f"🎯 {pos_out['headline']} ({position_confidence}%)\n"
+                f"⚡ {scalp_out['headline']} ({scalper_confidence}%)\n"
+                f"1H:{bias_1h['bias']} 15m:{bias_15m['bias']} 5m:{bias_5m['bias']}\n"
                 f"{tweet_hashtags(coin)}"
             )
             tweet_text      = trim_to_277(tweet)
@@ -1494,28 +1536,19 @@ if __name__ == "__main__":
     print(f"🚀 CRYPTO INTEL BOT — {now_est.strftime('%I:%M %p %Z')}")
     print("=" * 60)
 
-    # ── FIX: DST-proof scheduling detection ──
-    # Trust GitHub Actions' event name instead of checking the clock hour.
-    # GitHub's scheduled trigger is always "schedule"; manual dispatch is "workflow_dispatch".
-    # FORCE_FULL_REPORT env is set to "true" only on workflow_dispatch in the yml.
     github_event = os.getenv("GITHUB_EVENT_NAME", "")
     is_forced    = os.getenv("FORCE_FULL_REPORT") == "true"
     is_scheduled = github_event == "schedule"
 
-    # RUN_MODE=surge → surge check only. The 12-min surge cron is *also* a "schedule"
-    # event, so the event name alone can't tell a surge poll from a report run.
     surge_only = os.getenv("RUN_MODE", "").strip().lower() == "surge"
     if surge_only:
         is_scheduled = False
         is_forced    = False
 
-    # Fallback: if not in GH Actions at all (local run), use the old hour-based check
     if not github_event:
         scheduled_hours = config.get("scheduled_hours_est", DEFAULT_CONFIG["scheduled_hours_est"])
         is_scheduled = now_est.hour in scheduled_hours or (now_est.hour - 1) % 24 in scheduled_hours
 
-    # XRP-only mode: keep all legacy coin settings in config.json, but never
-    # call market-data/news processing for BTC/ETH/ADA/SOL/HBAR/ZEC.
     coins_to_process = ["XRP"]
 
     print(f"GITHUB_EVENT={github_event!r} | mode={'surge' if surge_only else 'report'} | forced={is_forced} | scheduled={is_scheduled}")
@@ -1524,12 +1557,10 @@ if __name__ == "__main__":
 
     _ensure(state, "news_posted", default={})
 
-    # ── Per-coin processing ──
     for coin in coins_to_process:
         print(f"\n[{coin}]")
         try:
             if surge_only:
-                # Light path: no history merge/save, no charts. Just the last hour of 1-min bars.
                 minute_df = fetch_histominute(coin, aggregate=1, limit=60)
                 small = _cc_to_ohlcv_df(_fetch_histohour_raw(coin, limit=3)) if minute_df is None else None
                 hourly = small.set_index("timestamp") if (small is not None and not small.empty) else None
@@ -1560,7 +1591,6 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
 
-    # ── News posting  (FIX: now actually runs) ──
     if (is_forced or is_scheduled) and not surge_only:
         print("\n[NEWS]")
         try:
@@ -1572,11 +1602,10 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
 
-    # ── Save state ──
     try:
         with open(SURGE_STATE_FILE, "w") as f:
             json.dump(surge_state, f, indent=2, sort_keys=True)
-        if not surge_only:  # surge lane never touches the report/news state
+        if not surge_only:
             with open(STATE_FILE, "w") as f:
                 json.dump(state, f, indent=2)
         print("\n✓ State saved successfully")
