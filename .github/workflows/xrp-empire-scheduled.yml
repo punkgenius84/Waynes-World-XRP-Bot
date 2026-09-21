@@ -1,1 +1,86 @@
+# path: .github/workflows/xrp-empire-scheduled.yml
+name: XRP Empire — Scheduled Reports
 
+on:
+  schedule:
+    - cron: '0 12 * * *'   # 8 AM EDT
+    - cron: '0 16 * * *'   # 12 PM EDT
+    - cron: '0 20 * * *'   # 4 PM EDT
+    - cron: '0 0 * * *'    # 8 PM EDT
+    - cron: '0 4 * * *'    # 12 AM EDT
+    - cron: '0 8 * * *'    # 4 AM EDT
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Queue instead of cancelling: cancelling mid-run could lose the history commit.
+concurrency:
+  group: xrp-empire-bot-scheduled
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # Falls back to the built-in token if you don't have a GH_PAT secret.
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Sanity check (compile)
+        run: python -m compileall -q combined_xrp_intel_report.py strategies
+
+      - name: Run XRP Empire Bot (full report)
+        env:
+          RUN_MODE:             report
+          DISCORD_WEBHOOK_XRP:  ${{ secrets.DISCORD_WEBHOOK_XRP }}
+          DISCORD_WEBHOOK_BTC:  ${{ secrets.DISCORD_WEBHOOK_BTC }}
+          DISCORD_WEBHOOK_ETH:  ${{ secrets.DISCORD_WEBHOOK_ETH }}
+          DISCORD_WEBHOOK_ADA:  ${{ secrets.DISCORD_WEBHOOK_ADA }}
+          DISCORD_WEBHOOK_SOL:  ${{ secrets.DISCORD_WEBHOOK_SOL }}
+          DISCORD_WEBHOOK_HBAR: ${{ secrets.DISCORD_WEBHOOK_HBAR }}
+          DISCORD_WEBHOOK_ZEC:  ${{ secrets.DISCORD_WEBHOOK_ZEC }}
+          DISCORD_WEBHOOK_NEWS: ${{ secrets.DISCORD_WEBHOOK_NEWS }}
+          X_API_KEY:            ${{ secrets.X_API_KEY }}
+          X_API_SECRET:         ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:       ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET:      ${{ secrets.X_ACCESS_SECRET }}
+          CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
+          GITHUB_EVENT_NAME:    ${{ github.event_name }}
+          FORCE_FULL_REPORT:    ${{ github.event_name == 'workflow_dispatch' && 'true' || '' }}
+        run: python combined_xrp_intel_report.py
+
+      - name: Commit state (rebase + retry, never force-push)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history/*.csv last_alert.json surge_state.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"; exit 0
+          fi
+          git commit -m "Auto: update price history + state [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase -X theirs origin main && git push origin HEAD:main; then
+              echo "pushed on attempt $i"; exit 0
+            fi
+            echo "push attempt $i failed, retrying"
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 4))
+          done
+          echo "::error::Could not push state after 5 attempts"
+          exit 1
