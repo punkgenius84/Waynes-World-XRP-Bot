@@ -844,29 +844,62 @@ def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
 
 
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
-    """Higher-timeframe bullish confidence score (not a calibrated probability)."""
+    """
+    Higher-timeframe position confidence.
+
+    This is a directional confidence score, NOT a calibrated probability.
+    Daily and 4H structure are deliberately dominant. RSI and Bollinger
+    position are supporting evidence only, and a ranging/choppy structure
+    prevents the score from becoming artificially extreme.
+    """
     score = 50.0
+
+    # Structure is the primary signal.
+    if "Bullish" in daily_struct:
+        score += 18
+    elif "Bearish" in daily_struct:
+        score -= 18
+
+    if "Bullish" in h4_struct:
+        score += 15
+    elif "Bearish" in h4_struct:
+        score -= 15
+
+    # Ranging/choppy means the market has not established a directional
+    # structure. Do not let momentum indicators overwhelm that fact.
+    ranging_count = sum("Ranging/Choppy" in s for s in (daily_struct, h4_struct))
+    if ranging_count == 2:
+        score = min(score, 65.0)
+    elif ranging_count == 1:
+        score = min(score, 78.0)
+
+    # RSI is supporting evidence, not the main driver.
+    if 52 <= rsi_val <= 68:
+        score += 4
+    elif 68 < rsi_val <= 75:
+        score += 1
+    elif rsi_val > 75:
+        score -= min(7, (rsi_val - 75) * 0.35)
+    elif 32 <= rsi_val < 48:
+        score -= 2
+    elif rsi_val < 32:
+        score += 2  # Oversold can support a rebound, but is not a trend signal.
+
+    # Bollinger position is context. Extreme extension slightly reduces
+    # continuation confidence; it does not automatically imply reversal.
     dist = float(bb.get("dist_pct", 50))
     if not np.isfinite(dist):
         dist = 50.0
+    if dist > 100:
+        score -= min(8, (dist - 100) * 0.20)
+    elif 55 <= dist <= 80:
+        score += 2
 
-    # Daily/4H structure gets the most weight. Bollinger location is context.
-    score += (dist - 50) * 0.35
-    if rsi_val <= 70:
-        score += (float(rsi_val) - 50.0) * 0.30
-    else:
-        score += 20.0 - (float(rsi_val) - 70.0) * 0.55
+    # With both higher timeframes ranging/choppy, keep the output explicitly
+    # in the non-extreme range regardless of indicator alignment.
+    if ranging_count == 2:
+        score = min(score, 65.0)
 
-    if "Bullish" in daily_struct:
-        score += 22
-    elif "Bearish" in daily_struct:
-        score -= 22
-    if "Bullish" in h4_struct:
-        score += 18
-    elif "Bearish" in h4_struct:
-        score -= 18
-
-    # A squeeze is volatility compression, not automatically bullish.
     return int(max(5, min(95, round(score))))
 
 
@@ -874,18 +907,26 @@ def calculate_scalper_confidence(
     bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
     rsi_val: int, bb: dict,
 ) -> int:
-    """Short-term directional confidence from 1H/15m/5m EMA alignment."""
+    """
+    Short-term directional confidence from 1H/15m/5m EMA alignment.
+
+    1H carries the most weight, followed by 15m and 5m. Neutral alignment
+    contributes no directional points, so 2-of-3 bullish cannot reach the
+    extreme range by itself.
+    """
     score = 50.0
+
     for bias, weight in zip(
         [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")],
-        [35, 25, 15],
+        [20, 15, 10],
     ):
         if "BULLISH" in bias:
             score += weight
         elif "BEARISH" in bias:
             score -= weight
 
-    # Momentum helps, but extreme extension reduces continuation confidence.
+    # Momentum is supportive, but overbought/extended conditions reduce
+    # continuation confidence rather than forcing a sell call.
     if 50 <= rsi_val <= 68:
         score += 5
     elif rsi_val > 80:
@@ -897,9 +938,22 @@ def calculate_scalper_confidence(
 
     dist = float(bb.get("dist_pct", 50))
     if np.isfinite(dist) and dist > 100:
-        score -= min(12, (dist - 100) * 0.20)
-    elif np.isfinite(dist) and dist >= 55:
-        score += 3
+        score -= min(8, (dist - 100) * 0.20)
+    elif np.isfinite(dist) and 55 <= dist <= 80:
+        score += 2
+
+    # Explicit ceiling: if any scalper timeframe is not bullish, do not
+    # present the setup as near-certain continuation.
+    biases = [
+        bias_1h.get("bias", ""),
+        bias_15m.get("bias", ""),
+        bias_5m.get("bias", ""),
+    ]
+    bullish_count = sum("BULLISH" in b for b in biases)
+    if bullish_count < 3:
+        score = min(score, 82.0)
+    if bullish_count <= 1:
+        score = min(score, 68.0)
 
     return int(max(5, min(95, round(score))))
 
@@ -997,9 +1051,16 @@ def send_surge_alert(coin: str, surge_pct: float, price: float, direction: str) 
 # ──────────────────────────────────────────────
 
 def rsi_stance(rsi: int) -> str:
-    if rsi >= 70: return "Sell"
-    if rsi <= 30: return "Buy"
-    return "Hold"
+    """Descriptive RSI state; extreme RSI is not treated as an automatic trade signal."""
+    if rsi >= 70:
+        return "Overbought / Extended"
+    if rsi <= 30:
+        return "Oversold"
+    if rsi >= 55:
+        return "Bullish Momentum"
+    if rsi <= 45:
+        return "Bearish Momentum"
+    return "Neutral"
 
 def bb_squeeze_flag(bb: dict) -> str:
     return "On" if (bb or {}).get("squeeze") == "SQUEEZE ACTIVE" else "Off"
