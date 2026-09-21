@@ -96,6 +96,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 CRYPTOCOMPARE_HISTOHOUR   = "https://min-api.cryptocompare.com/data/v2/histohour"
 CRYPTOCOMPARE_HISTOMINUTE = "https://min-api.cryptocompare.com/data/v2/histominute"
+CRYPTOCOMPARE_PRICE      = "https://min-api.cryptocompare.com/data/price"
 NEWS_ENDPOINT             = "https://min-api.cryptocompare.com/data/v2/news/"
 
 
@@ -461,6 +462,26 @@ def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame
         return hourly, df_4h, df_daily
 
 
+def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
+    """Fetch the current spot price directly from CryptoCompare.
+
+    This is intentionally separate from candle data so the Discord report's
+    displayed price is live rather than the last completed 4H candle close.
+    """
+    try:
+        r = _cc_get(CRYPTOCOMPARE_PRICE, {"fsym": coin, "tsyms": tsym})
+        payload = r.json()
+        if isinstance(payload, dict) and payload.get("Response") == "Error":
+            raise ValueError(payload.get("Message", "CryptoCompare error"))
+        value = payload.get(tsym)
+        if value is None:
+            raise ValueError(f"No {tsym} price returned")
+        return float(value)
+    except Exception as e:
+        print(f"⚠️  {coin}: live price fetch failed → {e} (using candle close)")
+        return None
+
+
 def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT") -> Optional[pd.DataFrame]:
     try:
         r = _cc_get(
@@ -822,18 +843,64 @@ def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
     return {"dist_pct": dist_pct, "squeeze": squeeze, "breakout": breakout}
 
 
-def calculate_bullish_probability(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
+def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
+    """Higher-timeframe bullish confidence score (not a calibrated probability)."""
     score = 50.0
     dist = float(bb.get("dist_pct", 50))
     if not np.isfinite(dist):
         dist = 50.0
-    score += (dist - 50) * 0.6
-    score += (rsi_val - 50) * 0.3
-    if "Bullish" in daily_struct: score += 20
-    if "Bearish" in daily_struct: score -= 20
-    if "Bullish" in h4_struct:    score += 15
-    if "Bearish" in h4_struct:    score -= 15
-    if bb.get("squeeze") == "SQUEEZE ACTIVE": score += 12
+
+    # Daily/4H structure gets the most weight. Bollinger location is context.
+    score += (dist - 50) * 0.35
+    if rsi_val <= 70:
+        score += (float(rsi_val) - 50.0) * 0.30
+    else:
+        score += 20.0 - (float(rsi_val) - 70.0) * 0.55
+
+    if "Bullish" in daily_struct:
+        score += 22
+    elif "Bearish" in daily_struct:
+        score -= 22
+    if "Bullish" in h4_struct:
+        score += 18
+    elif "Bearish" in h4_struct:
+        score -= 18
+
+    # A squeeze is volatility compression, not automatically bullish.
+    return int(max(5, min(95, round(score))))
+
+
+def calculate_scalper_confidence(
+    bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
+    rsi_val: int, bb: dict,
+) -> int:
+    """Short-term directional confidence from 1H/15m/5m EMA alignment."""
+    score = 50.0
+    for bias, weight in zip(
+        [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")],
+        [35, 25, 15],
+    ):
+        if "BULLISH" in bias:
+            score += weight
+        elif "BEARISH" in bias:
+            score -= weight
+
+    # Momentum helps, but extreme extension reduces continuation confidence.
+    if 50 <= rsi_val <= 68:
+        score += 5
+    elif rsi_val > 80:
+        score -= 12
+    elif rsi_val > 70:
+        score -= 5
+    elif rsi_val < 30:
+        score -= 4
+
+    dist = float(bb.get("dist_pct", 50))
+    if np.isfinite(dist) and dist > 100:
+        score -= min(12, (dist - 100) * 0.20)
+    elif np.isfinite(dist) and dist >= 55:
+        score += 3
+
     return int(max(5, min(95, round(score))))
 
 
@@ -1239,8 +1306,12 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     if not webhook_url or df_4h is None or df_4h.empty:
         return False
 
-    price      = float(df_4h["close"].iloc[-1])
-    # True 24h change: hourly close 24 bars back. (Was df_4h.iloc[-6], i.e. only ~16-20h.)
+    # Display the current spot price from CryptoCompare instead of the last
+    # completed 4H candle close. Technical indicators continue to use candles.
+    live_price = fetch_live_price(coin, "USD")
+    price = live_price if live_price is not None else float(df_4h["close"].iloc[-1])
+
+    # Keep the 24H comparison anchored to the hourly candle 24 hours ago.
     change_24h = (price / float(hourly["close"].iloc[-25]) - 1) * 100 if len(hourly) >= 25 else 0.0
 
     bb           = bollinger_analysis(df_4h)
@@ -1258,7 +1329,10 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
 
     bias_15m = run_scalper_ema(df_15m)
     bias_5m  = run_scalper_ema(df_5m)
-    bullish_prob  = calculate_bullish_probability(bb, rsi_val, daily_struct, h4_struct)
+
+    # Separate the higher-timeframe position view from the short-term scalper view.
+    position_confidence = calculate_market_confidence(bb, rsi_val, daily_struct, h4_struct)
+    scalper_confidence  = calculate_scalper_confidence(bias_1h, bias_15m, bias_5m, rsi_val, bb)
 
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
     embed   = DiscordEmbed(title=f"{coin} Market Report", color=COINS[coin]["color"])
@@ -1267,7 +1341,16 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="📊 RSI",        value=f"{rsi_val} → {rsi_stance(rsi_val)}",         inline=True)
     embed.add_embed_field(name="📈 Volatility", value=f"BB Pos: {bb['dist_pct']:.1f}%\n{bb['squeeze']}\n{bb['breakout']}", inline=True)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
-    embed.add_embed_field(name="🎯 Prob",       value=f"**{bullish_prob}%**",                        inline=True)
+    embed.add_embed_field(
+        name="🎯 Position Confidence",
+        value=f"**{position_confidence}%**\nDaily + 4H",
+        inline=True,
+    )
+    embed.add_embed_field(
+        name="⚡ Scalper Confidence",
+        value=f"**{scalper_confidence}%**\n1H + 15m + 5m",
+        inline=True,
+    )
     embed.add_embed_field(
         name="⚡ Scalper Bias",
         value=(
@@ -1330,7 +1413,8 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
                 f"Sqz:{bb_squeeze_flag(bb)} • BO:{bb_breakout_code(bb)}\n"
                 f"⚡ 1H: {bias_1h['bias']} → {bias_sig(bias_1h['bias'])}\n"
                 f"⚡ 15m: {bias_15m['bias']}  ⚡ 5m: {bias_5m['bias']}\n"
-                f"🎯 Prob {bullish_prob}% → {prob_stance(bullish_prob)}\n"
+                f"🎯 Position {position_confidence}% → {prob_stance(position_confidence)}\n"
+                f"⚡ Scalp {scalper_confidence}% → {prob_stance(scalper_confidence)}\n"
                 f"{tweet_hashtags(coin)}"
             )
             tweet_text      = trim_to_277(tweet)
@@ -1438,4 +1522,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️  Failed to save state: {e}")
 
-    print("✓ Run complete — Empire Status: ONLINE") 
+    print("✓ Run complete — Empire Status: ONLINE")
