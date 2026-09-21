@@ -1034,34 +1034,72 @@ def add_indicator_columns(d: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -> str:
+    """Render a dark trading-terminal chart with candles, EMA9/21, Bollinger Bands, volume and RSI."""
     import mplfinance as mpf
 
-    mpf_df = add_indicator_columns(_to_mpf(df)).dropna()
+    mpf_df = add_indicator_columns(_to_mpf(df)).dropna().copy()
     if len(mpf_df) < 50:
-        mpf_df = _to_mpf(df).dropna()
+        mpf_df = _to_mpf(df).dropna().copy()
+
+    last_price = float(mpf_df["Close"].iloc[-1])
+    price_line = pd.Series(last_price, index=mpf_df.index, name="Price")
+
+    # Dark terminal styling keeps the chart readable when posted to X/Discord.
+    style = mpf.make_mpf_style(
+        base_mpf_style="nightclouds",
+        marketcolors=mpf.make_marketcolors(
+            up="#22c55e", down="#ef4444", edge="inherit", wick="inherit",
+            volume="inherit", ohlc="inherit"
+        ),
+        gridstyle=":",
+        gridcolor="#334155",
+        facecolor="#0b1220",
+        figcolor="#0b1220",
+        rc={"font.size": 9, "axes.labelcolor": "#e5e7eb", "xtick.color": "#94a3b8", "ytick.color": "#94a3b8"},
+    )
 
     addplots = []
-    if "EMA9"  in mpf_df.columns: addplots.append(mpf.make_addplot(mpf_df["EMA9"]))
-    if "EMA21" in mpf_df.columns: addplots.append(mpf.make_addplot(mpf_df["EMA21"]))
+    if "EMA9" in mpf_df.columns:
+        addplots.append(mpf.make_addplot(mpf_df["EMA9"], color="#facc15", width=1.15))
+    if "EMA21" in mpf_df.columns:
+        addplots.append(mpf.make_addplot(mpf_df["EMA21"], color="#38bdf8", width=1.15))
     if "BB_UP" in mpf_df.columns:
-        addplots.append(mpf.make_addplot(mpf_df["BB_UP"]))
-        addplots.append(mpf.make_addplot(mpf_df["BB_MID"]))
-        addplots.append(mpf.make_addplot(mpf_df["BB_LO"]))
+        addplots.append(mpf.make_addplot(mpf_df["BB_UP"], color="#a78bfa", width=0.85))
+        addplots.append(mpf.make_addplot(mpf_df["BB_MID"], color="#94a3b8", width=0.75, linestyle="--"))
+        addplots.append(mpf.make_addplot(mpf_df["BB_LO"], color="#a78bfa", width=0.85))
     if "RSI14" in mpf_df.columns:
-        addplots.append(mpf.make_addplot(mpf_df["RSI14"], panel=1))
+        addplots.append(mpf.make_addplot(mpf_df["RSI14"], panel=2, color="#fb923c", width=1.0, secondary_y=False))
+        addplots.append(mpf.make_addplot(pd.Series(70.0, index=mpf_df.index), panel=2, color="#64748b", width=0.65, linestyle="--", secondary_y=False))
+        addplots.append(mpf.make_addplot(pd.Series(30.0, index=mpf_df.index), panel=2, color="#64748b", width=0.65, linestyle="--", secondary_y=False))
 
-    fig, _axes = mpf.plot(
+    fig, axes = mpf.plot(
         mpf_df,
         type="candle",
         addplot=addplots if addplots else None,
-        volume=False,
-        title=title,
-        panel_ratios=(3, 1),
+        volume="Volume" in mpf_df.columns,
+        title=f"{title}   |   ${last_price:,.4f}",
+        ylabel="Price",
+        ylabel_lower="Volume",
+        panel_ratios=(5, 2, 2),
+        ylim=None,
+        hlines=dict(hlines=[last_price], colors=["#f8fafc"], linestyle="-.", linewidths=0.8),
         returnfig=True,
-        figsize=(7.0, 4.0),
+        figsize=(10.0, 6.0),
         tight_layout=True,
+        style=style,
+        xrotation=0,
+        datetime_format="%m-%d %H:%M",
+        warn_too_much_data=10000,
     )
-    fig.savefig(out_path, dpi=150)
+
+    # Label the RSI panel when mplfinance exposes the axes in the expected order.
+    try:
+        axes[-1].set_ylabel("RSI", color="#e5e7eb")
+        axes[-1].set_ylim(0, 100)
+    except Exception:
+        pass
+
+    fig.savefig(out_path, dpi=180, facecolor="#0b1220", bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -1169,13 +1207,15 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     h4_struct    = market_structure(df_4h, "4H")
     bias_1h      = run_scalper_ema(hourly)
 
+    # Only request 15m minute data.  The old direct 5m request was the main
+    # CryptoCompare quota hit; derive the 5m signal from the 15m series instead.
     df_15m = fetch_histominute(coin, aggregate=15, limit=int(config.get("histominute_limit_15m", 1200)))
-    df_5m  = fetch_histominute(coin, aggregate=5,  limit=int(config.get("histominute_limit_5m",  1200)))
-    if df_15m is None: df_15m = hourly.resample("15min").ffill().dropna()
-    if df_5m  is None: df_5m  = hourly.resample("5min").ffill().dropna()
+    if df_15m is None:
+        df_15m = hourly.resample("15min").ffill().dropna()
+    df_5m = df_15m.resample("5min").ffill().dropna()
 
-    bias_15m      = run_scalper_ema(df_15m)
-    bias_5m       = run_scalper_ema(df_5m)
+    bias_15m = run_scalper_ema(df_15m)
+    bias_5m  = run_scalper_ema(df_5m)
     bullish_prob  = calculate_bullish_probability(bb, rsi_val, daily_struct, h4_struct)
 
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
@@ -1263,7 +1303,9 @@ if __name__ == "__main__":
         scheduled_hours = config.get("scheduled_hours_est", DEFAULT_CONFIG["scheduled_hours_est"])
         is_scheduled = now_est.hour in scheduled_hours or (now_est.hour - 1) % 24 in scheduled_hours
 
-    coins_to_process = config.get("coins", DEFAULT_CONFIG["coins"])
+    # XRP-only mode: keep all legacy coin settings in config.json, but never
+    # call market-data/news processing for BTC/ETH/ADA/SOL/HBAR/ZEC.
+    coins_to_process = ["XRP"]
 
     print(f"GITHUB_EVENT={github_event!r} | mode={'surge' if surge_only else 'report'} | forced={is_forced} | scheduled={is_scheduled}")
     print(f"coins={coins_to_process} (count={len(coins_to_process)})")
