@@ -1,0 +1,47 @@
+{
+  "coins": ["XRP", "BTC", "ETH", "ADA", "SOL", "HBAR", "ZEC"],
+  "scheduled_hours_est": [8, 12, 16, 21, 0, 4],
+
+  "surge_threshold_pct": 5.0,
+  "surge_cooldown_hours": 2,
+  "history_max_rows": 10000,
+
+  "post_reports_to_x": true,
+  "tweet_on_force": true,
+  "tweet_report_symbols": ["XRP", "BTC"],
+
+  "news_pages_max": 6,
+  "news_allowlist_domains": [
+    "coindesk.com",
+    "cointelegraph.com",
+    "decrypt.co",
+    "ambcrypto.com",
+    "u.today",
+    "theblock.co",
+    "beincrypto.com",
+    "cryptoslate.com",
+    "bitcoinmagazine.com",
+    "cryptonews.com"
+  ],
+  "news_max_per_coin": 5,
+  "news_global_cap": 45,
+
+  "xrp_tweet_charts_enabled": true,
+  "xrp_tweet_chart_bars": {
+    "Daily": 140,
+    "4H": 220,
+    "1H": 260,
+    "15m": 260
+  },
+
+  "btc_tweet_charts_enabled": true,
+  "btc_tweet_chart_bars": {
+    "Daily": 140,
+    "4H": 220,
+    "1H": 260,
+    "15m": 260
+  },
+
+  "histominute_limit_15m": 1200,
+  "histominute_limit_5m": 1200
+}

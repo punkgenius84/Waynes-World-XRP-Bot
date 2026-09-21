@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual envs
+.venv/
+venv/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Matplotlib / charts output (keep charts/.gitkeep)
+charts/*.png
+
+# Optional: if you ever create local logs
+*.log
+
+# Backups the bot makes if it ever meets an unreadable history file
+*.corrupt-*.bak
