@@ -1124,6 +1124,49 @@ def get_chart_cfg(coin: str) -> Tuple[bool, Dict[str, int]]:
     return enabled, {str(k): int(v) for k, v in bars.items()}
 
 
+def build_discord_chart_images(
+    coin: str,
+    df_daily: pd.DataFrame,
+    df_4h: pd.DataFrame,
+    hourly: pd.DataFrame,
+    df_15m: pd.DataFrame,
+) -> List[str]:
+    """Build four separate Discord chart images: Daily, 4H, 1H and 15m."""
+    enabled, bars_cfg = get_chart_cfg(coin)
+    if not enabled:
+        return []
+    if not _charts_available():
+        print("ℹ️  Charts skipped (mplfinance/Pillow missing)")
+        return []
+
+    pathlib.Path("charts").mkdir(exist_ok=True)
+    pathlib.Path("charts", "discord").mkdir(parents=True, exist_ok=True)
+
+    def tail(df: pd.DataFrame, n: int) -> pd.DataFrame:
+        return df.iloc[-n:] if (df is not None and not df.empty and n > 0) else df
+
+    d_daily = tail(df_daily, bars_cfg.get("Daily", 140))
+    d_4h    = tail(df_4h,    bars_cfg.get("4H",    220))
+    d_1h    = tail(hourly,   bars_cfg.get("1H",    260))
+    d_15    = tail(df_15m,   bars_cfg.get("15m",   260))
+
+    if any(x is None or x.empty for x in [d_daily, d_4h, d_1h, d_15]):
+        return []
+
+    out_dir = pathlib.Path("charts", "discord")
+    paths = [
+        (d_daily, "Daily", out_dir / f"{coin.lower()}_daily.png"),
+        (d_4h,    "4H",    out_dir / f"{coin.lower()}_4h.png"),
+        (d_1h,    "1H",    out_dir / f"{coin.lower()}_1h.png"),
+        (d_15,    "15m",   out_dir / f"{coin.lower()}_15m.png"),
+    ]
+
+    results: List[str] = []
+    for df, timeframe, out_path in paths:
+        results.append(render_single_timeframe_chart(df, f"{coin} — {timeframe}", str(out_path)))
+    return results
+
+
 def build_tweet_chart_image(
     coin: str,
     df_daily: pd.DataFrame,
@@ -1237,33 +1280,31 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.set_footer(text=f"Crypto Intelligence • {now_est.strftime('%I:%M %p %Z')}")
     embed.set_timestamp()
 
-    # ── Discord chart attachment ──
-    # Reuse the existing 2x2 chart builder, but attach the resulting image
-    # directly to the Discord report. This keeps the chart independent of X/Twitter.
-    discord_chart_path = build_tweet_chart_image(coin, df_daily, df_4h, hourly, df_15m)
-    chart_file = None
-    if discord_chart_path and os.path.exists(discord_chart_path):
-        chart_filename = os.path.basename(discord_chart_path)
+    # ── Discord chart attachments ──
+    # Attach four separate images so Discord displays Daily, 4H, 1H and 15m
+    # as individual clickable images instead of one stitched 2x2 image.
+    discord_chart_paths = build_discord_chart_images(coin, df_daily, df_4h, hourly, df_15m)
+    chart_files = []
+    if discord_chart_paths:
         try:
-            embed.set_image(url=f"attachment://{chart_filename}")
-            chart_file = open(discord_chart_path, "rb")
-            webhook.add_file(file=chart_file, filename=chart_filename)
-            print(f"✓ {coin}: Discord chart prepared → {chart_filename}")
+            for chart_path in discord_chart_paths:
+                if chart_path and os.path.exists(chart_path):
+                    chart_file = open(chart_path, "rb")
+                    chart_files.append(chart_file)
+                    webhook.add_file(file=chart_file, filename=os.path.basename(chart_path))
+            print(f"✓ {coin}: Discord charts prepared → {len(chart_files)} separate images")
         except Exception as e:
-            if chart_file:
-                try:
-                    chart_file.close()
-                except Exception:
-                    pass
-            chart_file = None
             print(f"⚠️  {coin}: Discord chart attachment failed → {e}")
 
     webhook.add_embed(embed)
     try:
         resp = webhook.execute()
     finally:
-        if chart_file:
-            chart_file.close()
+        for chart_file in chart_files:
+            try:
+                chart_file.close()
+            except Exception:
+                pass
     discord_success = hasattr(resp, "status_code") and 200 <= resp.status_code < 300
     if discord_success:
         print(f"✓ {coin}: Discord report sent")
