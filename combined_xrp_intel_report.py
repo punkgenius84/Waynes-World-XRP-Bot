@@ -1081,7 +1081,6 @@ def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -
         ylabel="Price",
         ylabel_lower="Volume",
         panel_ratios=(5, 2, 2),
-        ylim=None,
         hlines=dict(hlines=[last_price], colors=["#f8fafc"], linestyle="-.", linewidths=0.8),
         returnfig=True,
         figsize=(10.0, 6.0),
