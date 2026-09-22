@@ -1010,7 +1010,15 @@ def scalper_outlook(
     else:
         headline = "MIXED — SHORT-TERM"
         align = f"1H: {k1} • 15m: {k15}"
-        five = sig5 or k5
+        # 5m is fully aligned bullish/bearish → say so plainly rather than
+        # repeating the raw "Price < EMA9 < EMA21" text, which is already
+        # shown verbatim in the Scalper Bias field below this one.
+        if k5 == "BULLISH":
+            five = "Bullish (Aligned)"
+        elif k5 == "BEARISH":
+            five = "Bearish (Aligned)"
+        else:
+            five = sig5 or "Neutral"
 
     return {
         "headline": headline,
