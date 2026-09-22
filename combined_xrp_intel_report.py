@@ -849,6 +849,106 @@ def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[f
     return cleaned[:2]
 
 
+
+def build_volume_profile(
+    hourly: Optional[pd.DataFrame],
+    lookback_days: int = 60,
+    n_bins: int = 48,
+    va_pct: float = 0.70,
+) -> Dict[str, Any]:
+    """Approximate visible-range volume profile from hourly OHLCV.
+
+    Each bar's volume is spread evenly across the price bins it traded through.
+    Not tick-accurate. Good enough for POC / value area on a Discord card.
+    """
+    empty = {"ok": False, "poc": None, "vah": None, "val": None, "days": lookback_days}
+    if hourly is None or hourly.empty or "volume" not in hourly.columns:
+        return empty
+    try:
+        df = hourly.copy()
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return empty
+        cutoff = df.index.max() - pd.Timedelta(days=int(lookback_days))
+        df = df[df.index >= cutoff]
+        df = df.dropna(subset=["high", "low", "volume"])
+        if len(df) < 48:
+            return empty
+
+        px_low = float(df["low"].min())
+        px_high = float(df["high"].max())
+        if not np.isfinite(px_low) or not np.isfinite(px_high) or px_high <= px_low:
+            return empty
+
+        edges = np.linspace(px_low, px_high, int(n_bins) + 1)
+        vol = np.zeros(int(n_bins), dtype=float)
+
+        lows = df["low"].to_numpy(dtype=float)
+        highs = df["high"].to_numpy(dtype=float)
+        vols = df["volume"].to_numpy(dtype=float)
+        for lo, hi, v in zip(lows, highs, vols):
+            if not np.isfinite(v) or v <= 0 or not np.isfinite(lo) or not np.isfinite(hi):
+                continue
+            if hi < lo:
+                lo, hi = hi, lo
+            if hi == lo:
+                idx = int(np.clip(np.searchsorted(edges, lo, side="right") - 1, 0, n_bins - 1))
+                vol[idx] += v
+                continue
+            left = int(np.clip(np.searchsorted(edges, lo, side="right") - 1, 0, n_bins - 1))
+            right = int(np.clip(np.searchsorted(edges, hi, side="right") - 1, 0, n_bins - 1))
+            span = right - left + 1
+            vol[left:right + 1] += v / span
+
+        if vol.sum() <= 0:
+            return empty
+
+        poc_i = int(np.argmax(vol))
+        mids = (edges[:-1] + edges[1:]) / 2.0
+        poc = float(mids[poc_i])
+
+        target = float(vol.sum()) * float(va_pct)
+        lo_i = hi_i = poc_i
+        captured = vol[poc_i]
+        while captured < target and (lo_i > 0 or hi_i < len(vol) - 1):
+            take_lo = vol[lo_i - 1] if lo_i > 0 else -1.0
+            take_hi = vol[hi_i + 1] if hi_i < len(vol) - 1 else -1.0
+            if take_hi > take_lo:
+                hi_i += 1
+                captured += vol[hi_i]
+            else:
+                lo_i -= 1
+                captured += vol[lo_i]
+
+        return {
+            "ok": True,
+            "poc": poc,
+            "val": float(edges[lo_i]),
+            "vah": float(edges[hi_i + 1]),
+            "days": lookback_days,
+            "bars": int(len(df)),
+        }
+    except Exception:
+        return empty
+
+
+def format_volume_profile(price: float, vp: Dict[str, Any]) -> str:
+    if not vp or not vp.get("ok"):
+        return "Volume Profile: not enough history"
+    poc, val, vah = vp["poc"], vp["val"], vp["vah"]
+    if price > vah:
+        loc = "above value"
+    elif price < val:
+        loc = "below value"
+    elif abs(price - poc) / poc <= 0.01:
+        loc = "at POC"
+    else:
+        loc = "inside value"
+    return (
+        f"POC {_fmt_px(poc)} • VA {_fmt_px(val)}–{_fmt_px(vah)}\n"
+        f"{vp['days']}d hourly • spot {loc} ({_pct_from(price, poc)} vs POC)"
+    )
+
+
 def build_levels_block(
     price: float,
     df_daily: pd.DataFrame,
@@ -1767,6 +1867,8 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     levels_text = build_levels_block(
         price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
     )
+    vp = build_volume_profile(hourly, lookback_days=60)
+    vp_text = format_volume_profile(price, vp)
     condition = classify_market_condition(
         daily_struct, h4_struct, bias_1h, bias_15m, bias_5m, bb, rsi_4h, price, df_daily, df_4h,
     )
@@ -1792,6 +1894,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
+    embed.add_embed_field(name="📦 Volume Profile", value=vp_text[:1024], inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
         value=(
