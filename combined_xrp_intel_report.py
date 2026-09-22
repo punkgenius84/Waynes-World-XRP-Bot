@@ -35,6 +35,12 @@ Fixes in the 2026-09 repair pass:
 - Scalper confidence weights 1H > 15m > 5m and cannot go extreme unless all 3 agree.
 - RSI 70+ is labeled Overbought / Extended, not Sell.
 - Reports include Position Outlook and Scalper Outlook condition labels.
+
+2026-09 15m/5m fetch pass:
+- Do not invent 15m/5m bars with ffill from hourly or 15m.
+- Fetch 15m and 5m separately (CryptoCompare, then Coinbase).
+- CryptoCompare JSON rate-limit on HTTP 200 is retried.
+- Warm history uses a small histohour limit instead of 2000 every run.
 """
 
 from __future__ import annotations
@@ -95,8 +101,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "xrp_tweet_chart_bars": {"Daily": 140, "4H": 220, "1H": 260, "15m": 260},
     "btc_tweet_charts_enabled": True,
     "btc_tweet_chart_bars": {"Daily": 140, "4H": 220, "1H": 260, "15m": 260},
-    "histominute_limit_15m": 1200,
-    "histominute_limit_5m": 1200,
+    "histominute_limit_15m": 300,
+    "histominute_limit_5m": 300,
 }
 
 CRYPTOCOMPARE_HISTOHOUR   = "https://min-api.cryptocompare.com/data/v2/histohour"
@@ -173,6 +179,13 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
             cfg[k] = int(cfg.get(k, DEFAULT_CONFIG[k]))
         except Exception:
             cfg[k] = int(DEFAULT_CONFIG[k])
+
+    for k in ["histominute_limit_15m", "histominute_limit_5m"]:
+        try:
+            cfg[k] = int(cfg.get(k, DEFAULT_CONFIG[k]))
+        except Exception:
+            cfg[k] = int(DEFAULT_CONFIG[k])
+        cfg[k] = max(50, min(cfg[k], 500))
 
 
 def _load_state() -> Dict[str, Any]:
@@ -368,6 +381,14 @@ def _cc_get(url: str, params: Dict[str, Any], timeout: int = 20, tries: int = 3)
             if r.status_code in (429, 500, 502, 503, 504):
                 raise requests.HTTPError(f"HTTP {r.status_code}", response=r)
             r.raise_for_status()
+            try:
+                payload = r.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                msg = str(payload.get("Message") or payload.get("message") or "")
+                if payload.get("Response") == "Error" and "rate limit" in msg.lower():
+                    raise requests.HTTPError(f"CryptoCompare rate limit: {msg}", response=r)
             return r
         except Exception as e:  # noqa: BLE001
             last_exc = e
@@ -386,7 +407,7 @@ def _cc_points(r: requests.Response) -> List[dict]:
 def _fetch_histohour_raw(coin: str, limit: int = 2000) -> List[dict]:
     for tsym in ("USDT", "USD"):
         try:
-            r = _cc_get(CRYPTOCOMPARE_HISTOHOUR, {"fsym": coin, "tsym": tsym, "limit": limit})
+            r = _cc_get(CRYPTOCOMPARE_HISTOHOUR, {"fsym": coin, "tsym": tsym, "limit": int(limit)})
             data_points = _cc_points(r)
             if data_points:
                 return data_points
@@ -397,8 +418,9 @@ def _fetch_histohour_raw(coin: str, limit: int = 2000) -> List[dict]:
 
 def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     history_df = safe_load_history(coin)
+    hour_limit = 72 if len(history_df) >= 200 else 2000
     try:
-        data_points = _fetch_histohour_raw(coin)
+        data_points = _fetch_histohour_raw(coin, limit=hour_limit)
         if not data_points:
             raise ValueError("Empty histohour data")
 
@@ -419,7 +441,7 @@ def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame
             {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
         ).dropna()
 
-        print(f"✓ {coin}: {len(hourly)} hourly bars")
+        print(f"✓ {coin}: {len(hourly)} hourly bars (fetched {hour_limit})")
         return hourly, df_4h, df_daily
     except Exception as e:
         print(f"⚠️  {coin}: histohour failed → {e} (fallback local)")
@@ -473,7 +495,6 @@ def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Opti
             timeout=15,
         )
         if r.status_code == 404:
-            # Product not listed on Coinbase (e.g. some smaller alt pairs).
             return None
         r.raise_for_status()
         rows = r.json()
@@ -492,25 +513,31 @@ def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Opti
 
 
 def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT") -> Optional[pd.DataFrame]:
-    try:
-        r = _cc_get(
-            CRYPTOCOMPARE_HISTOMINUTE,
-            {"fsym": coin, "tsym": tsym, "limit": int(limit), "aggregate": int(aggregate)},
-        )
-        data_points = _cc_points(r)
-        df = _cc_to_ohlcv_df(data_points)
-        if not df.empty:
-            return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
-        raise ValueError("Empty histominute data")
-    except Exception as e:
-        print(f"⚠️  {coin}: histominute agg={aggregate} failed → {e} (trying Coinbase fallback)")
+    last_err: Optional[Exception] = None
+    quotes = list(dict.fromkeys([tsym, "USD", "USDT"]))
+    for quote in quotes:
+        try:
+            r = _cc_get(
+                CRYPTOCOMPARE_HISTOMINUTE,
+                {"fsym": coin, "tsym": quote, "limit": int(limit), "aggregate": int(aggregate)},
+            )
+            data_points = _cc_points(r)
+            df = _cc_to_ohlcv_df(data_points)
+            if not df.empty:
+                print(f"✓ {coin}: histominute agg={aggregate} → CryptoCompare {quote} ({len(df)} bars)")
+                return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+            raise ValueError("Empty histominute data")
+        except Exception as e:
+            last_err = e
+            print(f"⚠️  {coin}: histominute agg={aggregate} tsym={quote} failed → {e}")
 
     df_cb = fetch_coinbase_candles(coin, aggregate, tsym="USD")
     if df_cb is not None and not df_cb.empty:
-        print(f"✓ {coin}: histominute agg={aggregate} → Coinbase fallback ({len(df_cb)} bars)")
-        return df_cb.tail(int(limit)) if limit else df_cb
+        out = df_cb.tail(int(limit)) if limit else df_cb
+        print(f"✓ {coin}: histominute agg={aggregate} → Coinbase fallback ({len(out)} bars)")
+        return out
 
-    print(f"⚠️  {coin}: histominute agg={aggregate} unavailable from both CryptoCompare and Coinbase")
+    print(f"⚠️  {coin}: histominute agg={aggregate} unavailable ({last_err})")
     return None
 
 
@@ -867,7 +894,6 @@ def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
     else:
         direction = "Flat"
 
-    # Does the volume back up the move, or undercut it?
     high_vol = ratio >= 1.4
     low_vol  = ratio < 0.7
     if direction == "Flat":
@@ -997,11 +1023,6 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
     if _aligned_bear(last):
         return {"bias": "BEARISH 🔽", "signal": "Confirmed — Price Below Both EMAs"}
 
-    # Alignment is broken on this candle. Instead of a generic "Confirmation
-    # lost", describe exactly how it broke — a shallow pullback above EMA21,
-    # a full collapse through both EMAs, an EMA9/EMA21 cross, or plain
-    # compression — so 1H/15m/5m states read as genuinely different signals
-    # rather than three copies of the same label.
     close, e9, e21 = float(last["close"]), float(last["e9"]), float(last["e21"])
     was_bull = _aligned_bull(prev)
     was_bear = _aligned_bear(prev)
@@ -1011,8 +1032,6 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
         return {"bias": "NEUTRAL ⚪", "signal": "EMA Compression — EMA9 ≈ EMA21"}
 
     if e9 >= e21:
-        # EMA structure is still bullish (EMA9 above EMA21). Either price
-        # has only dipped below EMA9, or it has fully collapsed below both.
         if close < e21:
             detail = "Collapse — Price Below Both EMAs (EMA9 > EMA21 intact)"
         else:
@@ -1020,8 +1039,6 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
         prefix = "Confirmation Lost — " if was_bull else ""
         return {"bias": "NEUTRAL ⚪", "signal": prefix + detail}
 
-    # EMA9 below EMA21: bearish structure. Either price has only poked
-    # above EMA9, or it has fully reclaimed above both.
     if close > e21:
         detail = "Reclaim — Price Above Both EMAs (EMA9 < EMA21 intact)"
     else:
@@ -1125,9 +1142,6 @@ def scalper_outlook(
     else:
         headline = "MIXED — SHORT-TERM"
         align = f"1H: {k1} • 15m: {k15}"
-        # 5m is fully aligned bullish/bearish → say so plainly rather than
-        # repeating the raw "Confirmed — Price Below Both EMAs" text, which is already
-        # shown verbatim in the Scalper Bias field below this one.
         if k5 == "BULLISH":
             five = "Bullish (Aligned)"
         elif k5 == "BEARISH":
@@ -1402,7 +1416,7 @@ def build_discord_chart_images(
     df_daily: pd.DataFrame,
     df_4h: pd.DataFrame,
     hourly: pd.DataFrame,
-    df_15m: pd.DataFrame,
+    df_15m: Optional[pd.DataFrame],
 ) -> List[str]:
     enabled, bars_cfg = get_chart_cfg(coin)
     if not enabled:
@@ -1414,16 +1428,15 @@ def build_discord_chart_images(
     pathlib.Path("charts").mkdir(exist_ok=True)
     pathlib.Path("charts", "discord").mkdir(parents=True, exist_ok=True)
 
-    def tail(df: pd.DataFrame, n: int) -> pd.DataFrame:
-        return df.iloc[-n:] if (df is not None and not df.empty and n > 0) else df
+    def tail(df: Optional[pd.DataFrame], n: int) -> Optional[pd.DataFrame]:
+        if df is None or df.empty or n <= 0:
+            return None
+        return df.iloc[-n:]
 
     d_daily = tail(df_daily, bars_cfg.get("Daily", 140))
     d_4h    = tail(df_4h,    bars_cfg.get("4H",    220))
     d_1h    = tail(hourly,   bars_cfg.get("1H",    260))
     d_15    = tail(df_15m,   bars_cfg.get("15m",   260))
-
-    if any(x is None or x.empty for x in [d_daily, d_4h, d_1h, d_15]):
-        return []
 
     out_dir = pathlib.Path("charts", "discord")
     paths = [
@@ -1435,6 +1448,8 @@ def build_discord_chart_images(
 
     results: List[str] = []
     for df, timeframe, out_path in paths:
+        if df is None or df.empty:
+            continue
         results.append(render_single_timeframe_chart(df, f"{coin} — {timeframe}", str(out_path)))
     return results
 
@@ -1444,7 +1459,7 @@ def build_tweet_chart_image(
     df_daily: pd.DataFrame,
     df_4h: pd.DataFrame,
     hourly: pd.DataFrame,
-    df_15m: pd.DataFrame,
+    df_15m: Optional[pd.DataFrame],
 ) -> Optional[str]:
     enabled, bars_cfg = get_chart_cfg(coin)
     if not enabled:
@@ -1455,8 +1470,10 @@ def build_tweet_chart_image(
 
     pathlib.Path("charts").mkdir(exist_ok=True)
 
-    def tail(df: pd.DataFrame, n: int) -> pd.DataFrame:
-        return df.iloc[-n:] if (df is not None and not df.empty and n > 0) else df
+    def tail(df: Optional[pd.DataFrame], n: int) -> Optional[pd.DataFrame]:
+        if df is None or df.empty or n <= 0:
+            return None
+        return df.iloc[-n:]
 
     d_daily = tail(df_daily, bars_cfg.get("Daily", 140))
     d_4h    = tail(df_4h,    bars_cfg.get("4H",    220))
@@ -1512,13 +1529,21 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     h4_struct    = market_structure(df_4h, "4H")
     bias_1h      = run_scalper_ema(hourly)
 
-    df_15m = fetch_histominute(coin, aggregate=15, limit=int(config.get("histominute_limit_15m", 1200)))
-    if df_15m is None:
-        df_15m = hourly.resample("15min").ffill().dropna()
-    df_5m = df_15m.resample("5min").ffill().dropna()
+    limit_15m = int(config.get("histominute_limit_15m", 300))
+    limit_5m  = int(config.get("histominute_limit_5m", 300))
+    df_15m = fetch_histominute(coin, aggregate=15, limit=limit_15m)
+    time.sleep(0.4)
+    df_5m = fetch_histominute(coin, aggregate=5, limit=limit_5m)
 
-    bias_15m = run_scalper_ema(df_15m)
-    bias_5m  = run_scalper_ema(df_5m)
+    if df_15m is None or df_15m.empty:
+        bias_15m = {"bias": "No Data", "signal": "15m feed unavailable"}
+    else:
+        bias_15m = run_scalper_ema(df_15m)
+
+    if df_5m is None or df_5m.empty:
+        bias_5m = {"bias": "No Data", "signal": "5m feed unavailable"}
+    else:
+        bias_5m = run_scalper_ema(df_5m)
 
     position_confidence = calculate_market_confidence(bb, rsi_val, daily_struct, h4_struct)
     scalper_confidence  = calculate_scalper_confidence(bias_1h, bias_15m, bias_5m, rsi_val, bb)
