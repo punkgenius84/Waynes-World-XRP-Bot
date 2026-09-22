@@ -768,6 +768,48 @@ def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
     return {"dist_pct": dist_pct, "squeeze": squeeze, "breakout": breakout}
 
 
+def _fmt_compact_usd(n: float) -> str:
+    n = float(n)
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    if n >= 1_000_000_000:
+        return f"{sign}${n / 1_000_000_000:.2f}B"
+    if n >= 1_000_000:
+        return f"{sign}${n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"{sign}${n / 1_000:.1f}K"
+    return f"{sign}${n:,.0f}"
+
+
+def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
+    """Current 4H bar volume vs its trailing average — a raw number alone
+    doesn't say much, but 'this move happened on 2.3x normal volume' does.
+    """
+    if df_4h is None or len(df_4h) < lookback + 1 or "volume" not in df_4h.columns:
+        return {"last": 0.0, "avg": 0.0, "ratio": 1.0, "label": "No Data"}
+
+    vol  = df_4h["volume"]
+    last = float(vol.iloc[-1])
+    avg  = float(vol.iloc[-(lookback + 1):-1].mean())
+
+    if not np.isfinite(avg) or avg <= 0:
+        return {"last": last, "avg": 0.0, "ratio": 1.0, "label": "No Data"}
+
+    ratio = last / avg
+    if ratio >= 2.0:
+        label = "Very High"
+    elif ratio >= 1.4:
+        label = "High"
+    elif ratio >= 0.7:
+        label = "Average"
+    elif ratio >= 0.4:
+        label = "Low"
+    else:
+        label = "Very Low"
+
+    return {"last": last, "avg": avg, "ratio": round(ratio, 2), "label": label}
+
+
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
     score = 50.0
 
@@ -1391,6 +1433,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     change_24h = (price / float(hourly["close"].iloc[-25]) - 1) * 100 if len(hourly) >= 25 else 0.0
 
     bb           = bollinger_analysis(df_4h)
+    vol_info     = volume_analysis(df_4h)
     rsi_val, _   = calculate_rsi(df_4h)
     daily_struct = market_structure(df_daily, "Daily")
     h4_struct    = market_structure(df_4h, "4H")
@@ -1415,6 +1458,12 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="💰 Price",      value=f"${price:,.4f}\n24H: `{change_24h:+.2f}%`", inline=True)
     embed.add_embed_field(name="📊 RSI",        value=f"{rsi_val} → {rsi_stance(rsi_val)}",         inline=True)
     embed.add_embed_field(name="📈 Volatility", value=f"BB Pos: {bb['dist_pct']:.1f}%\n{bb['squeeze']}\n{bb['breakout']}", inline=True)
+    if vol_info["label"] != "No Data":
+        embed.add_embed_field(
+            name="📊 Volume (4H)",
+            value=f"{_fmt_compact_usd(vol_info['last'])}\n{vol_info['ratio']:.2f}x avg — {vol_info['label']}",
+            inline=True,
+        )
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
