@@ -878,9 +878,9 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
     prev     = d.iloc[-2] if len(d) >= 22 else last
 
     if _aligned_bull(last):
-        return {"bias": "BULLISH 🔼", "signal": "Price > EMA9 > EMA21"}
+        return {"bias": "BULLISH 🔼", "signal": "Confirmed — Price Above Both EMAs"}
     if _aligned_bear(last):
-        return {"bias": "BEARISH 🔽", "signal": "Price < EMA9 < EMA21"}
+        return {"bias": "BEARISH 🔽", "signal": "Confirmed — Price Below Both EMAs"}
 
     # Alignment is broken on this candle. Instead of a generic "Confirmation
     # lost", describe exactly how it broke — a shallow pullback above EMA21,
@@ -1011,7 +1011,7 @@ def scalper_outlook(
         headline = "MIXED — SHORT-TERM"
         align = f"1H: {k1} • 15m: {k15}"
         # 5m is fully aligned bullish/bearish → say so plainly rather than
-        # repeating the raw "Price < EMA9 < EMA21" text, which is already
+        # repeating the raw "Confirmed — Price Below Both EMAs" text, which is already
         # shown verbatim in the Scalper Bias field below this one.
         if k5 == "BULLISH":
             five = "Bullish (Aligned)"
