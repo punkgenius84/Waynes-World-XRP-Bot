@@ -4,43 +4,17 @@ combined_xrp_intel_report.py
 
 Crypto Intelligence Report Bot — 2025/2026 Edition
 
-Fixes in this version:
-- GITHUB_EVENT_NAME used to detect scheduled vs manual runs (DST-proof).
-- News fetching actually implemented and posted to DISCORD_WEBHOOK_NEWS.
-- tweet_on_force defaults True so manual dispatch also posts to X.
-- Surge alerts deduplicated properly via state file.
-- Deep-merge DEFAULT_CONFIG into config.json so missing keys never zero-out runtime behavior.
-- Validate config["coins"] and fall back to defaults if empty/invalid.
-- X posting uses Tweepy v1.1 media upload + Tweepy v2 create_tweet.
-- Charts are optional: if mplfinance/Pillow are missing, tweets become text-only.
+Core philosophy unchanged:
+- Position = Daily + 4H structure first. RSI/BB support only.
+- Scalper = 1H > 15m > 5m EMA alignment.
+- No buy/sell commands. Descriptive levels and conditions only.
 
-Fixes in the 2026-09 repair pass:
-- RUN_MODE=surge makes a run surge-check only. Before, the ~12-min surge cron was also a
-  GitHub "schedule" event, so it was treated as a scheduled run and posted full reports,
-  tweets and news every 12 minutes.
-- Surge cooldown state lives in its own file (surge_state.json) so the surge lane and the
-  report lane can both commit without clobbering each other.
-- Surge detection in surge mode uses real 60-minute price change from 1-minute bars.
-- last_alert.json legacy keys are migrated/pruned (mixed-type keys crashed the news prune).
-- History CSV loader strips git conflict markers and never wipes data on a parse error.
-- RSI no longer reports 0 when there are no down bars (should be 100); NaN-safe BB/prob.
-- 24H change is now a true 24-hour change (was ~16-20h).
-- News coin matching uses word boundaries ("sol" no longer matches "solution").
-- Discord webhooks retry on 429; CryptoCompare calls accept CRYPTOCOMPARE_API_KEY and retry.
-- X posts fall back to text-only if media upload fails; length uses X's weighted counting.
-
-2026-09 scoring / outlook pass:
-- Position confidence is dominated by Daily + 4H structure, not RSI/BB.
-- Ranging/choppy higher timeframes cap Position confidence.
-- Scalper confidence weights 1H > 15m > 5m and cannot go extreme unless all 3 agree.
-- RSI 70+ is labeled Overbought / Extended, not Sell.
-- Reports include Position Outlook and Scalper Outlook condition labels.
-
-2026-09 15m/5m fetch pass:
-- Do not invent 15m/5m bars with ffill from hourly or 15m.
-- Fetch 15m and 5m separately (CryptoCompare, then Coinbase).
-- CryptoCompare JSON rate-limit on HTTP 200 is retried.
-- Warm history uses a small histohour limit instead of 2000 every run.
+2026-09 intelligence upgrades:
+- Scalper confidence uses 15m RSI, not 4H RSI.
+- 15m volume confirmation is reported separately from 4H volume.
+- Missing 15m/5m data lowers scalper confidence instead of counting as Neutral.
+- Compact Market Condition layer: TREND / RANGE / BREAKOUT / PULLBACK / REVERSAL WATCH.
+- Key Levels from confirmed Daily/4H swings + descriptive break/loss language.
 """
 
 from __future__ import annotations
@@ -472,12 +446,6 @@ def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
         return None
 
 
-# --- Coinbase Exchange fallback -------------------------------------------
-# CryptoCompare/CoinDesk Data retired free-tier API access on 2026-05-21, so
-# its minute-resolution endpoint is unreliable without a paid key. Coinbase's
-# public "Exchange" candles endpoint needs no API key, isn't geo-blocked for
-# US traffic (unlike binance.com), and its granularity options line up
-# exactly with the 5m/15m bars this bot needs.
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
 _COINBASE_GRANULARITY_SEC = {1: 60, 5: 300, 15: 900, 60: 3600, 360: 21600, 1440: 86400}
 
@@ -500,7 +468,6 @@ def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Opti
         rows = r.json()
         if not rows:
             return None
-        # Coinbase returns [time, low, high, open, close, volume], newest first.
         df = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
         for c in ("open", "high", "low", "close", "volume"):
@@ -791,6 +758,225 @@ def market_structure(df: pd.DataFrame, timeframe: str) -> str:
         return "Unavailable"
 
 
+def _fmt_px(price: float) -> str:
+    p = float(price)
+    if p >= 1000:
+        return f"${p:,.0f}"
+    if p >= 100:
+        return f"${p:,.2f}"
+    if p >= 1:
+        return f"${p:,.4f}"
+    return f"${p:,.6f}"
+
+
+def _pct_from(price: float, level: float) -> str:
+    if not level or level == 0 or not np.isfinite(level):
+        return "n/a"
+    diff = (price - level) / level * 100.0
+    return f"{diff:+.2f}%"
+
+
+def _last_swings(df: Optional[pd.DataFrame], timeframe: str) -> Tuple[Optional[float], Optional[float]]:
+    if df is None or len(df) < 30:
+        return None, None
+    window = 10 if timeframe == "Daily" else 15
+    try:
+        high_roll = df["high"].rolling(2 * window + 1, center=True).max()
+        low_roll  = df["low"].rolling(2 * window + 1, center=True).min()
+        highs = df["high"][df["high"] == high_roll].dropna()
+        lows  = df["low"][df["low"] == low_roll].dropna()
+        sh = float(highs.iloc[-1]) if len(highs) else None
+        sl = float(lows.iloc[-1]) if len(lows) else None
+        if sh is not None and sl is not None and sl > sh:
+            sh, sl = max(sh, sl), min(sh, sl)
+        return sh, sl
+    except Exception:
+        return None, None
+
+
+def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
+    empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
+    if hourly is None or hourly.empty:
+        return empty
+    try:
+        weekly = hourly.resample("1W").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last"}
+        ).dropna()
+        if weekly.empty:
+            return empty
+        this = weekly.iloc[-1]
+        prev = weekly.iloc[-2] if len(weekly) >= 2 else None
+        return {
+            "week_high": float(this["high"]),
+            "week_low": float(this["low"]),
+            "prev_high": float(prev["high"]) if prev is not None else None,
+            "prev_low": float(prev["low"]) if prev is not None else None,
+            "prev_close": float(prev["close"]) if prev is not None else None,
+        }
+    except Exception:
+        return empty
+
+
+def _range_location(price: float, high: Optional[float], low: Optional[float]) -> str:
+    if high is None or low is None or high <= low:
+        return "Location unknown"
+    mid = (high + low) / 2.0
+    span = high - low
+    if price >= high:
+        return "Above range high"
+    if price <= low:
+        return "Below range low"
+    if abs(price - mid) <= span * 0.12:
+        return "At mid-range"
+    if price > mid:
+        return "Upper half of range"
+    return "Lower half of range"
+
+
+def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[float]:
+    cleaned: List[float] = []
+    for v in vals:
+        if v is None or not np.isfinite(v):
+            continue
+        if side == "res" and v < price * 0.995:
+            continue
+        if side == "sup" and v > price * 1.005:
+            continue
+        if any(abs(v - x) / max(x, 1e-9) < 0.004 for x in cleaned):
+            continue
+        cleaned.append(float(v))
+    cleaned.sort(reverse=(side == "res"))
+    return cleaned[:2]
+
+
+def build_levels_block(
+    price: float,
+    df_daily: pd.DataFrame,
+    df_4h: pd.DataFrame,
+    hourly: pd.DataFrame,
+    daily_struct: str,
+    h4_struct: str,
+    bias_1h: Dict[str, str],
+    bias_15m: Dict[str, str],
+    bias_5m: Dict[str, str],
+) -> str:
+    d_hi, d_lo = _last_swings(df_daily, "Daily")
+    h_hi, h_lo = _last_swings(df_4h, "4H")
+    week = _weekly_levels(hourly)
+
+    res = _uniq_levels([h_hi, d_hi, week.get("week_high"), week.get("prev_high")], price, "res")
+    sup = _uniq_levels([h_lo, d_lo, week.get("week_low"), week.get("prev_low")], price, "sup")
+
+    lines: List[str] = []
+    if res:
+        lines.append("Resistance: " + " / ".join(_fmt_px(x) for x in res))
+    else:
+        lines.append("Resistance: none nearby")
+    if sup:
+        lines.append("Support: " + " / ".join(_fmt_px(x) for x in sup))
+    else:
+        lines.append("Support: none nearby")
+
+    if d_hi is not None and d_lo is not None:
+        mid = (d_hi + d_lo) / 2.0
+        lines.append(
+            f"Daily range {_fmt_px(d_lo)}–{_fmt_px(d_hi)} • mid {_fmt_px(mid)} • {_range_location(price, d_hi, d_lo)}"
+        )
+    if h_hi is not None and h_lo is not None:
+        lines.append(f"4H swings {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
+
+    if res:
+        lines.append(f"Break above {_fmt_px(res[0])} → structure improving")
+    if sup:
+        lines.append(f"Loss of {_fmt_px(sup[0])} → short-term weakness increases")
+
+    if d_hi is not None and d_lo is not None:
+        lines.append(f"Invalidation: 4H close outside {_fmt_px(d_lo)}–{_fmt_px(d_hi)}")
+    elif "Bullish" in (daily_struct or "") and d_lo is not None:
+        lines.append(f"Invalidation: 4H close below Daily swing low {_fmt_px(d_lo)}")
+    elif "Bearish" in (daily_struct or "") and d_hi is not None:
+        lines.append(f"Invalidation: 4H close above Daily swing high {_fmt_px(d_hi)}")
+
+    ranging = ("Ranging" in (daily_struct or "") or "Choppy" in (daily_struct or "")) and (
+        "Ranging" in (h4_struct or "") or "Choppy" in (h4_struct or "")
+    )
+    k1 = _bias_kind(bias_1h.get("bias", ""))
+    k15 = _bias_kind(bias_15m.get("bias", ""))
+    k5 = _bias_kind(bias_5m.get("bias", ""))
+    if ranging:
+        short = [f"{tf} {k.lower()}" for tf, k in (("1H", k1), ("15m", k15), ("5m", k5)) if k != "NEUTRAL"]
+        if short:
+            lines.append("Note: Higher TF unconfirmed. Short TF " + " / ".join(short) + " inside Daily range.")
+        else:
+            lines.append("Note: Higher TF unconfirmed. No short-TF alignment.")
+
+    return "\n".join(lines)
+
+
+def classify_market_condition(
+    daily_struct: str,
+    h4_struct: str,
+    bias_1h: Dict[str, str],
+    bias_15m: Dict[str, str],
+    bias_5m: Dict[str, str],
+    bb: dict,
+    rsi_4h: int,
+    price: float,
+    df_daily: pd.DataFrame,
+    df_4h: pd.DataFrame,
+) -> str:
+    k1 = _bias_kind(bias_1h.get("bias", ""))
+    k15 = _bias_kind(bias_15m.get("bias", ""))
+    k5 = _bias_kind(bias_5m.get("bias", ""))
+    sig1 = bias_1h.get("signal", "")
+    ranging = ("Ranging" in (daily_struct or "") or "Choppy" in (daily_struct or "")) and (
+        "Ranging" in (h4_struct or "") or "Choppy" in (h4_struct or "")
+    )
+    both_bull = "Bullish" in (daily_struct or "") and "Bullish" in (h4_struct or "")
+    both_bear = "Bearish" in (daily_struct or "") and "Bearish" in (h4_struct or "")
+    d_hi, d_lo = _last_swings(df_daily, "Daily")
+    loc = _range_location(price, d_hi, d_lo)
+    bo = (bb or {}).get("breakout", "")
+    dist = float((bb or {}).get("dist_pct", 50) or 50)
+
+    if "BULLISH BREAKOUT" in str(bo):
+        return "BREAKOUT — 4H upper-band event"
+    if "BEARISH BREAKOUT" in str(bo):
+        return "BREAKOUT — 4H lower-band event"
+
+    if ranging and loc == "Above range high":
+        return "BREAKOUT WATCH — Daily range high"
+    if ranging and loc == "Below range low":
+        return "BREAKOUT WATCH — Daily range low"
+
+    if ranging and rsi_4h >= 70 and dist >= 100 and (k15 == "BEARISH" or k5 == "BEARISH"):
+        return "REVERSAL WATCH — extended range high + short-term pressure"
+    if ranging and rsi_4h <= 30 and dist <= 10 and (k15 == "BULLISH" or k5 == "BULLISH"):
+        return "REVERSAL WATCH — extended range low + short-term bounce"
+
+    if both_bull and "Pullback" in sig1:
+        return "TREND + PULLBACK — higher TF up, 1H digesting"
+    if both_bear and "Bounce" in sig1:
+        return "TREND + PULLBACK — higher TF down, 1H bouncing"
+    if both_bull:
+        return "TREND — Daily/4H bullish"
+    if both_bear:
+        return "TREND — Daily/4H bearish"
+
+    short_bear = sum(x == "BEARISH" for x in (k1, k15, k5))
+    short_bull = sum(x == "BULLISH" for x in (k1, k15, k5))
+    if ranging and short_bear >= 2:
+        return "RANGE + SHORT-TERM BEARISH PRESSURE"
+    if ranging and short_bull >= 2:
+        return "RANGE + SHORT-TERM BULLISH PRESSURE"
+    if ranging and "Pullback" in sig1:
+        return "RANGE + PULLBACK"
+    if ranging:
+        return "RANGE — no confirmed higher-TF trend"
+
+    return "MIXED — timeframes disagree"
+
+
 def _rsi_from_close(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
     gain  = delta.clip(lower=0).rolling(period).mean()
@@ -803,14 +989,24 @@ def _rsi_from_close(close: pd.Series, period: int = 14) -> pd.Series:
     return rsi
 
 
-def calculate_rsi(df_4h: pd.DataFrame) -> Tuple[int, str]:
-    if df_4h is None or len(df_4h) < 15:
-        return 50, "No Data"
+def rsi_from_frame(df: Optional[pd.DataFrame]) -> Tuple[Optional[int], str]:
+    if df is None or len(df) < 15:
+        return None, "No Data"
     try:
-        rsi_val  = int(_rsi_from_close(df_4h["close"], 14).iloc[-1])
+        raw = _rsi_from_close(df["close"], 14).iloc[-1]
+        if not np.isfinite(raw):
+            return None, "No Data"
+        rsi_val = int(raw)
         return rsi_val, f"{rsi_val} → {rsi_stance(rsi_val)}"
     except Exception:
-        return 50, "Error"
+        return None, "Error"
+
+
+def calculate_rsi(df_4h: pd.DataFrame) -> Tuple[int, str]:
+    val, label = rsi_from_frame(df_4h)
+    if val is None:
+        return 50, label
+    return val, label
 
 
 def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
@@ -856,17 +1052,13 @@ def _fmt_compact_usd(n: float) -> str:
     return f"{sign}${n:,.0f}"
 
 
-def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
-    """Current 4H bar volume vs its trailing average, paired with which way
-    price moved on that bar — 'high volume' only means something once you
-    know whether it came with a bullish or bearish candle.
-    """
+def volume_analysis(df: Optional[pd.DataFrame], lookback: int = 20) -> Dict[str, Any]:
     empty = {"last": 0.0, "avg": 0.0, "ratio": 1.0, "label": "No Data",
               "direction": "Flat", "read": "No Data"}
-    if df_4h is None or len(df_4h) < lookback + 1 or "volume" not in df_4h.columns:
+    if df is None or len(df) < lookback + 1 or "volume" not in df.columns:
         return empty
 
-    vol  = df_4h["volume"]
+    vol  = df["volume"]
     last = float(vol.iloc[-1])
     avg  = float(vol.iloc[-(lookback + 1):-1].mean())
 
@@ -885,8 +1077,8 @@ def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
     else:
         label = "Very Low"
 
-    last_open  = float(df_4h["open"].iloc[-1])
-    last_close = float(df_4h["close"].iloc[-1])
+    last_open  = float(df["open"].iloc[-1])
+    last_close = float(df["close"].iloc[-1])
     if last_close > last_open:
         direction = "Up"
     elif last_close < last_open:
@@ -901,7 +1093,7 @@ def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
     elif high_vol:
         read = f"{direction} Move — Volume Confirms"
     elif low_vol:
-        read = f"{direction} Move — Volume Unconfirmed (Weak Participation)"
+        read = f"{direction} Move — Weak participation"
     else:
         read = f"{direction} Move — Normal Volume"
 
@@ -955,9 +1147,11 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
 
 def calculate_scalper_confidence(
     bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
-    rsi_val: int, bb: dict,
-) -> int:
+    rsi_15m: Optional[int], bb: dict,
+    has_15m: bool, has_5m: bool,
+) -> Tuple[int, str]:
     score = 50.0
+    notes: List[str] = []
 
     for bias, weight in zip(
         [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")],
@@ -968,14 +1162,15 @@ def calculate_scalper_confidence(
         elif "BEARISH" in bias:
             score -= weight
 
-    if 50 <= rsi_val <= 68:
-        score += 5
-    elif rsi_val > 80:
-        score -= 12
-    elif rsi_val > 70:
-        score -= 5
-    elif rsi_val < 30:
-        score -= 4
+    if rsi_15m is not None:
+        if 50 <= rsi_15m <= 68:
+            score += 5
+        elif rsi_15m > 80:
+            score -= 12
+        elif rsi_15m > 70:
+            score -= 5
+        elif rsi_15m < 30:
+            score -= 4
 
     dist = float(bb.get("dist_pct", 50))
     if np.isfinite(dist) and dist > 100:
@@ -983,18 +1178,27 @@ def calculate_scalper_confidence(
     elif np.isfinite(dist) and 55 <= dist <= 80:
         score += 2
 
-    biases = [
-        bias_1h.get("bias", ""),
-        bias_15m.get("bias", ""),
-        bias_5m.get("bias", ""),
-    ]
+    biases = [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")]
     bullish_count = sum("BULLISH" in b for b in biases)
     if bullish_count < 3:
         score = min(score, 82.0)
     if bullish_count <= 1:
         score = min(score, 68.0)
 
-    return int(max(5, min(95, round(score))))
+    if not has_15m:
+        score -= 12
+        score = min(score, 45.0)
+        notes.append("15m data unavailable")
+    if not has_5m:
+        score -= 8
+        score = min(score, 58.0)
+        notes.append("5m data unavailable")
+    if not has_15m and not has_5m:
+        score = min(score, 35.0)
+
+    conf = int(max(5, min(95, round(score))))
+    qualifier = " — " + "; ".join(notes) if notes else ""
+    return conf, qualifier
 
 
 def _ema(s: pd.Series, n: int) -> pd.Series:
@@ -1101,12 +1305,12 @@ def position_outlook(
 
 def scalper_outlook(
     bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
-    rsi_val: int, bb: dict, confidence: int,
+    rsi_val: Optional[int], bb: dict, confidence: int,
 ) -> Dict[str, Any]:
     k1 = _bias_kind(bias_1h.get("bias", ""))
     k15 = _bias_kind(bias_15m.get("bias", ""))
     k5 = _bias_kind(bias_5m.get("bias", ""))
-    ext = extension_level(rsi_val, bb)
+    ext = extension_level(rsi_val if rsi_val is not None else 50, bb)
     sig5 = bias_5m.get("signal", k5)
 
     if k1 == "BULLISH" and k15 == "BULLISH" and k5 == "BULLISH":
@@ -1523,8 +1727,11 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     change_24h = (price / float(hourly["close"].iloc[-25]) - 1) * 100 if len(hourly) >= 25 else 0.0
 
     bb           = bollinger_analysis(df_4h)
-    vol_info     = volume_analysis(df_4h)
-    rsi_val, _   = calculate_rsi(df_4h)
+    vol_4h       = volume_analysis(df_4h)
+    rsi_4h, rsi_4h_label = rsi_from_frame(df_4h)
+    if rsi_4h is None:
+        rsi_4h = 50
+        rsi_4h_label = "No Data"
     daily_struct = market_structure(df_daily, "Daily")
     h4_struct    = market_structure(df_4h, "4H")
     bias_1h      = run_scalper_ema(hourly)
@@ -1535,34 +1742,56 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     time.sleep(0.4)
     df_5m = fetch_histominute(coin, aggregate=5, limit=limit_5m)
 
-    if df_15m is None or df_15m.empty:
+    has_15m = df_15m is not None and not df_15m.empty and len(df_15m) >= 21
+    has_5m  = df_5m is not None and not df_5m.empty and len(df_5m) >= 21
+
+    if not has_15m:
         bias_15m = {"bias": "No Data", "signal": "15m feed unavailable"}
     else:
         bias_15m = run_scalper_ema(df_15m)
 
-    if df_5m is None or df_5m.empty:
+    if not has_5m:
         bias_5m = {"bias": "No Data", "signal": "5m feed unavailable"}
     else:
         bias_5m = run_scalper_ema(df_5m)
 
-    position_confidence = calculate_market_confidence(bb, rsi_val, daily_struct, h4_struct)
-    scalper_confidence  = calculate_scalper_confidence(bias_1h, bias_15m, bias_5m, rsi_val, bb)
-    pos_out = position_outlook(daily_struct, h4_struct, rsi_val, bb, position_confidence)
-    scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_val, bb, scalper_confidence)
+    rsi_15m, rsi_15m_label = rsi_from_frame(df_15m if has_15m else None)
+    vol_15m = volume_analysis(df_15m if has_15m else None)
+
+    position_confidence = calculate_market_confidence(bb, rsi_4h, daily_struct, h4_struct)
+    scalper_confidence, scalp_note = calculate_scalper_confidence(
+        bias_1h, bias_15m, bias_5m, rsi_15m, bb, has_15m, has_5m,
+    )
+    pos_out = position_outlook(daily_struct, h4_struct, rsi_4h, bb, position_confidence)
+    scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
+    levels_text = build_levels_block(
+        price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+    )
+    condition = classify_market_condition(
+        daily_struct, h4_struct, bias_1h, bias_15m, bias_5m, bb, rsi_4h, price, df_daily, df_4h,
+    )
 
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
     embed   = DiscordEmbed(title=f"{coin} Market Report", color=COINS[coin]["color"])
     embed.set_thumbnail(url=COINS[coin]["thumb"])
     embed.add_embed_field(name="💰 Price",      value=f"${price:,.4f}\n24H: `{change_24h:+.2f}%`", inline=True)
-    embed.add_embed_field(name="📊 RSI",        value=f"{rsi_val} → {rsi_stance(rsi_val)}",         inline=True)
+    embed.add_embed_field(name="📊 RSI",        value=f"4H: {rsi_4h_label}\n15m: {rsi_15m_label}", inline=True)
     embed.add_embed_field(name="📈 Volatility", value=f"BB Pos: {bb['dist_pct']:.1f}%\n{bb['squeeze']}\n{bb['breakout']}", inline=True)
-    if vol_info["label"] != "No Data":
+    if vol_4h["label"] != "No Data":
         embed.add_embed_field(
             name="📊 Volume (4H)",
-            value=f"{_fmt_compact_usd(vol_info['last'])}\n{vol_info['ratio']:.2f}x avg — {vol_info['label']}\n{vol_info['read']}",
+            value=f"{_fmt_compact_usd(vol_4h['last'])}\n{vol_4h['ratio']:.2f}x avg — {vol_4h['label']}\n{vol_4h['read']}",
             inline=True,
         )
+    if vol_15m["label"] != "No Data":
+        embed.add_embed_field(
+            name="📊 Volume (15m)",
+            value=f"{vol_15m['ratio']:.2f}x avg — {vol_15m['label']}\n{vol_15m['read']}",
+            inline=True,
+        )
+    embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
+    embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
         value=(
@@ -1577,7 +1806,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="⚡ Scalper Outlook",
         value=(
             f"**{scalp_out['headline']}**\n"
-            f"Confidence: {scalper_confidence}%\n"
+            f"Confidence: {scalper_confidence}%{scalp_note}\n"
             f"{scalp_out['align']}\n"
             f"5m: {scalp_out['five']}\n"
             f"Extension: {scalp_out['extension']}"
@@ -1635,8 +1864,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
             tweet = (
                 f"📊 ${coin} {tweet_time}\n"
                 f"💰 ${price:,.4f} ({change_24h:+.2f}%)\n"
-                f"📐 D:{_trend_short(daily_struct)} • 4H:{_trend_short(h4_struct)}\n"
-                f"RSI {rsi_val} → {rsi_stance(rsi_val)}\n"
+                f"🧭 {condition}\n"
                 f"🎯 {pos_out['headline']} ({position_confidence}%)\n"
                 f"⚡ {scalp_out['headline']} ({scalper_confidence}%)\n"
                 f"1H:{bias_1h['bias']} 15m:{bias_15m['bias']} 5m:{bias_5m['bias']}\n"
