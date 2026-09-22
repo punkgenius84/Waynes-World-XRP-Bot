@@ -782,18 +782,21 @@ def _fmt_compact_usd(n: float) -> str:
 
 
 def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
-    """Current 4H bar volume vs its trailing average — a raw number alone
-    doesn't say much, but 'this move happened on 2.3x normal volume' does.
+    """Current 4H bar volume vs its trailing average, paired with which way
+    price moved on that bar — 'high volume' only means something once you
+    know whether it came with a bullish or bearish candle.
     """
+    empty = {"last": 0.0, "avg": 0.0, "ratio": 1.0, "label": "No Data",
+              "direction": "Flat", "read": "No Data"}
     if df_4h is None or len(df_4h) < lookback + 1 or "volume" not in df_4h.columns:
-        return {"last": 0.0, "avg": 0.0, "ratio": 1.0, "label": "No Data"}
+        return empty
 
     vol  = df_4h["volume"]
     last = float(vol.iloc[-1])
     avg  = float(vol.iloc[-(lookback + 1):-1].mean())
 
     if not np.isfinite(avg) or avg <= 0:
-        return {"last": last, "avg": 0.0, "ratio": 1.0, "label": "No Data"}
+        return {**empty, "last": last}
 
     ratio = last / avg
     if ratio >= 2.0:
@@ -807,7 +810,29 @@ def volume_analysis(df_4h: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
     else:
         label = "Very Low"
 
-    return {"last": last, "avg": avg, "ratio": round(ratio, 2), "label": label}
+    last_open  = float(df_4h["open"].iloc[-1])
+    last_close = float(df_4h["close"].iloc[-1])
+    if last_close > last_open:
+        direction = "Up"
+    elif last_close < last_open:
+        direction = "Down"
+    else:
+        direction = "Flat"
+
+    # Does the volume back up the move, or undercut it?
+    high_vol = ratio >= 1.4
+    low_vol  = ratio < 0.7
+    if direction == "Flat":
+        read = "No Clear Move"
+    elif high_vol:
+        read = f"{direction} Move — Volume Confirms"
+    elif low_vol:
+        read = f"{direction} Move — Volume Unconfirmed (Weak Participation)"
+    else:
+        read = f"{direction} Move — Normal Volume"
+
+    return {"last": last, "avg": avg, "ratio": round(ratio, 2), "label": label,
+             "direction": direction, "read": read}
 
 
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
@@ -1461,7 +1486,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     if vol_info["label"] != "No Data":
         embed.add_embed_field(
             name="📊 Volume (4H)",
-            value=f"{_fmt_compact_usd(vol_info['last'])}\n{vol_info['ratio']:.2f}x avg — {vol_info['label']}",
+            value=f"{_fmt_compact_usd(vol_info['last'])}\n{vol_info['ratio']:.2f}x avg — {vol_info['label']}\n{vol_info['read']}",
             inline=True,
         )
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
