@@ -882,15 +882,37 @@ def run_scalper_ema(df: pd.DataFrame) -> Dict[str, str]:
     if _aligned_bear(last):
         return {"bias": "BEARISH 🔽", "signal": "Price < EMA9 < EMA21"}
 
-    if _aligned_bull(prev):
-        return {"bias": "NEUTRAL ⚪", "signal": "Confirmation lost"}
-    if _aligned_bear(prev):
-        return {"bias": "NEUTRAL ⚪", "signal": "Short confirmation lost"}
-    if last["close"] > last["e9"]:
-        return {"bias": "NEUTRAL ⚪", "signal": "Above EMA9, waiting on EMA21"}
-    if last["close"] < last["e9"]:
-        return {"bias": "NEUTRAL ⚪", "signal": "Below EMA9, waiting on EMA21"}
-    return {"bias": "NEUTRAL ⚪", "signal": "No EMA alignment"}
+    # Alignment is broken on this candle. Instead of a generic "Confirmation
+    # lost", describe exactly how it broke — a shallow pullback above EMA21,
+    # a full collapse through both EMAs, an EMA9/EMA21 cross, or plain
+    # compression — so 1H/15m/5m states read as genuinely different signals
+    # rather than three copies of the same label.
+    close, e9, e21 = float(last["close"]), float(last["e9"]), float(last["e21"])
+    was_bull = _aligned_bull(prev)
+    was_bear = _aligned_bear(prev)
+    gap_pct  = abs(e9 - e21) / e21 * 100 if e21 else 0.0
+
+    if gap_pct < 0.05:
+        return {"bias": "NEUTRAL ⚪", "signal": "EMA Compression — EMA9 ≈ EMA21"}
+
+    if e9 >= e21:
+        # EMA structure is still bullish (EMA9 above EMA21). Either price
+        # has only dipped below EMA9, or it has fully collapsed below both.
+        if close < e21:
+            detail = "Collapse — Price Below Both EMAs (EMA9 > EMA21 intact)"
+        else:
+            detail = "Pullback — Price Below EMA9, Above EMA21"
+        prefix = "Confirmation Lost — " if was_bull else ""
+        return {"bias": "NEUTRAL ⚪", "signal": prefix + detail}
+
+    # EMA9 below EMA21: bearish structure. Either price has only poked
+    # above EMA9, or it has fully reclaimed above both.
+    if close > e21:
+        detail = "Reclaim — Price Above Both EMAs (EMA9 < EMA21 intact)"
+    else:
+        detail = "Bounce — Price Above EMA9, Below EMA21"
+    prefix = "Confirmation Lost — " if was_bear else ""
+    return {"bias": "NEUTRAL ⚪", "signal": prefix + detail}
 
 
 def _bias_kind(bias: str) -> str:
