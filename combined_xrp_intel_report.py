@@ -450,6 +450,47 @@ def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
         return None
 
 
+# --- Coinbase Exchange fallback -------------------------------------------
+# CryptoCompare/CoinDesk Data retired free-tier API access on 2026-05-21, so
+# its minute-resolution endpoint is unreliable without a paid key. Coinbase's
+# public "Exchange" candles endpoint needs no API key, isn't geo-blocked for
+# US traffic (unlike binance.com), and its granularity options line up
+# exactly with the 5m/15m bars this bot needs.
+COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
+_COINBASE_GRANULARITY_SEC = {1: 60, 5: 300, 15: 900, 60: 3600, 360: 21600, 1440: 86400}
+
+
+def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Optional[pd.DataFrame]:
+    granularity = _COINBASE_GRANULARITY_SEC.get(int(aggregate))
+    if granularity is None:
+        return None
+    product_id = f"{coin.upper()}-{tsym.upper()}"
+    try:
+        r = requests.get(
+            COINBASE_CANDLES_URL.format(product_id=product_id),
+            params={"granularity": granularity},
+            headers={"User-Agent": "CryptoIntelBot/2.0 (Coinbase fallback)"},
+            timeout=15,
+        )
+        if r.status_code == 404:
+            # Product not listed on Coinbase (e.g. some smaller alt pairs).
+            return None
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            return None
+        # Coinbase returns [time, low, high, open, close, volume], newest first.
+        df = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        for c in ("open", "high", "low", "close", "volume"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=["close"]).sort_values("timestamp").drop_duplicates("timestamp")
+        return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+    except Exception as e:
+        print(f"⚠️  {coin}: Coinbase candles fetch failed (agg={aggregate}) → {e}")
+        return None
+
+
 def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT") -> Optional[pd.DataFrame]:
     try:
         r = _cc_get(
@@ -458,12 +499,19 @@ def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT")
         )
         data_points = _cc_points(r)
         df = _cc_to_ohlcv_df(data_points)
-        if df.empty:
-            return None
-        return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+        if not df.empty:
+            return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+        raise ValueError("Empty histominute data")
     except Exception as e:
-        print(f"⚠️  {coin}: histominute agg={aggregate} failed → {e}")
-        return None
+        print(f"⚠️  {coin}: histominute agg={aggregate} failed → {e} (trying Coinbase fallback)")
+
+    df_cb = fetch_coinbase_candles(coin, aggregate, tsym="USD")
+    if df_cb is not None and not df_cb.empty:
+        print(f"✓ {coin}: histominute agg={aggregate} → Coinbase fallback ({len(df_cb)} bars)")
+        return df_cb.tail(int(limit)) if limit else df_cb
+
+    print(f"⚠️  {coin}: histominute agg={aggregate} unavailable from both CryptoCompare and Coinbase")
+    return None
 
 
 NEWS_RSS_FEEDS = [
