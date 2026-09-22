@@ -105,10 +105,6 @@ CRYPTOCOMPARE_PRICE      = "https://min-api.cryptocompare.com/data/price"
 NEWS_ENDPOINT             = "https://min-api.cryptocompare.com/data/v2/news/"
 
 
-# ──────────────────────────────────────────────
-# Config helpers
-# ──────────────────────────────────────────────
-
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(base)
     for k, v in (override or {}).items():
@@ -243,10 +239,6 @@ COINS = {
 }
 
 
-# ──────────────────────────────────────────────
-# Twitter / X
-# ──────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class TwitterClients:
     v2: tweepy.Client
@@ -283,10 +275,6 @@ twitter_clients = get_twitter_clients()
 
 pathlib.Path(HISTORY_DIR).mkdir(exist_ok=True)
 
-
-# ──────────────────────────────────────────────
-# History helpers
-# ──────────────────────────────────────────────
 
 _CONFLICT_RE = re.compile(r"^(<<<<<<<|=======|>>>>>>>)")
 _HIST_COLS   = ["timestamp", "open", "high", "low", "close", "volume"]
@@ -367,10 +355,6 @@ def _cc_to_ohlcv_df(data_points: List[dict]) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     return df.sort_values("timestamp").drop_duplicates("timestamp")
 
-
-# ──────────────────────────────────────────────
-# Data fetching
-# ──────────────────────────────────────────────
 
 def _cc_get(url: str, params: Dict[str, Any], timeout: int = 20, tries: int = 3) -> requests.Response:
     headers = {}
@@ -481,10 +465,6 @@ def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT")
         print(f"⚠️  {coin}: histominute agg={aggregate} failed → {e}")
         return None
 
-
-# ──────────────────────────────────────────────
-# News fetching & posting
-# ──────────────────────────────────────────────
 
 NEWS_RSS_FEEDS = [
     ("CoinDesk",         "https://www.coindesk.com/arc/outboundfeeds/rss/",  "coindesk.com"),
@@ -714,10 +694,6 @@ def post_news_to_discord(articles: List[dict]) -> int:
     return posted_count
 
 
-# ──────────────────────────────────────────────
-# Technical indicators
-# ──────────────────────────────────────────────
-
 def market_structure(df: pd.DataFrame, timeframe: str) -> str:
     try:
         if df is None or len(df) < 50:
@@ -793,12 +769,6 @@ def bollinger_analysis(df_4h: pd.DataFrame) -> Dict[str, object]:
 
 
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
-    """
-    Higher-timeframe position confidence.
-
-    Daily and 4H structure dominate. RSI and Bollinger are supporting evidence.
-    Two ranging/choppy higher timeframes prevent an extreme score.
-    """
     score = 50.0
 
     if "Bullish" in daily_struct:
@@ -846,10 +816,6 @@ def calculate_scalper_confidence(
     bias_1h: Dict[str, str], bias_15m: Dict[str, str], bias_5m: Dict[str, str],
     rsi_val: int, bb: dict,
 ) -> int:
-    """
-    Short-term directional confidence from 1H/15m/5m EMA alignment.
-    1H carries the most weight. Neutral TFs contribute no directional points.
-    """
     score = 50.0
 
     for bias, weight in zip(
@@ -1033,10 +999,6 @@ def scalper_outlook(
     }
 
 
-# ──────────────────────────────────────────────
-# Surge alerts
-# ──────────────────────────────────────────────
-
 def check_surge(
     coin: str,
     hourly_df: pd.DataFrame,
@@ -1098,12 +1060,7 @@ def send_surge_alert(coin: str, surge_pct: float, price: float, direction: str) 
     return ok
 
 
-# ──────────────────────────────────────────────
-# Formatting helpers
-# ──────────────────────────────────────────────
-
 def rsi_stance(rsi: int) -> str:
-    """Descriptive RSI state; extreme RSI is not treated as an automatic trade signal."""
     if rsi >= 70:
         return "Overbought / Extended"
     if rsi <= 30:
@@ -1173,10 +1130,6 @@ def tweet_hashtags(coin: str) -> str:
     if coin == "XRP": return "#XRP #Crypto #Trading"
     return f"#{coin} #Crypto #Trading"
 
-
-# ──────────────────────────────────────────────
-# Chart building
-# ──────────────────────────────────────────────
 
 def _charts_available() -> bool:
     try:
@@ -1377,10 +1330,6 @@ def build_tweet_chart_image(
         return stitch_2x2([p1, p2, p3, p4], out_path)
 
 
-# ──────────────────────────────────────────────
-# X / Twitter posting
-# ──────────────────────────────────────────────
-
 def upload_media_and_tweet(coin: str, text: str, image_path: Optional[str]) -> bool:
     if not twitter_clients:
         return False
@@ -1401,10 +1350,6 @@ def upload_media_and_tweet(coin: str, text: str, image_path: Optional[str]) -> b
         print(f"⚠️  {coin}: X post failed → {e}")
         return False
 
-
-# ──────────────────────────────────────────────
-# Discord report
-# ──────────────────────────────────────────────
 
 def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> bool:
     webhook_url = os.getenv(f"DISCORD_WEBHOOK_{coin}")
@@ -1526,10 +1471,6 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
 
     return discord_success or twitter_success
 
-
-# ──────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("=" * 60)
