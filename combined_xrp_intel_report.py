@@ -15,6 +15,12 @@ Core philosophy unchanged:
 - Missing 15m/5m data lowers scalper confidence instead of counting as Neutral.
 - Compact Market Condition layer: TREND / RANGE / BREAKOUT / PULLBACK / REVERSAL WATCH.
 - Key Levels from confirmed Daily/4H swings + descriptive break/loss language.
+
+2026-09-23 price fixes:
+- Live USD first; never treat 4H close as spot if 1H exists.
+- Histohour/histominute quote USD before USDT.
+- Reject live ticks that diverge >4% from last 1H close.
+- 24h % uses the same spot vs hourly close ~24h ago.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np              # noqa: E402
 import tweepy                   # noqa: E402
+
 
 CONFIG_FILE  = "config.json"
 STATE_FILE   = "last_alert.json"
@@ -83,6 +90,8 @@ CRYPTOCOMPARE_HISTOHOUR   = "https://min-api.cryptocompare.com/data/v2/histohour
 CRYPTOCOMPARE_HISTOMINUTE = "https://min-api.cryptocompare.com/data/v2/histominute"
 CRYPTOCOMPARE_PRICE      = "https://min-api.cryptocompare.com/data/price"
 NEWS_ENDPOINT             = "https://min-api.cryptocompare.com/data/v2/news/"
+
+LIVE_VS_HOURLY_MAX_DIVERGENCE = 0.04
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -379,11 +388,12 @@ def _cc_points(r: requests.Response) -> List[dict]:
 
 
 def _fetch_histohour_raw(coin: str, limit: int = 2000) -> List[dict]:
-    for tsym in ("USDT", "USD"):
+    for tsym in ("USD", "USDT"):
         try:
             r = _cc_get(CRYPTOCOMPARE_HISTOHOUR, {"fsym": coin, "tsym": tsym, "limit": int(limit)})
             data_points = _cc_points(r)
             if data_points:
+                print(f"✓ {coin}: histohour tsym={tsym} ({len(data_points)} bars)")
                 return data_points
         except Exception as e:
             print(f"⚠️  {coin}: histohour tsym={tsym} error → {e}")
@@ -440,10 +450,83 @@ def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
         value = payload.get(tsym)
         if value is None:
             raise ValueError(f"No {tsym} price returned")
-        return float(value)
+        price = float(value)
+        if not np.isfinite(price) or price <= 0:
+            raise ValueError(f"Invalid {tsym} price {value}")
+        return price
     except Exception as e:
-        print(f"⚠️  {coin}: live price fetch failed → {e} (using candle close)")
+        print(f"⚠️  {coin}: live {tsym} fetch failed → {e}")
         return None
+
+
+def _last_close(df: Optional[pd.DataFrame]) -> Optional[float]:
+    if df is None or df.empty or "close" not in df.columns:
+        return None
+    try:
+        val = float(df["close"].iloc[-1])
+    except Exception:
+        return None
+    if not np.isfinite(val) or val <= 0:
+        return None
+    return val
+
+
+def resolve_spot_price(
+    coin: str,
+    hourly: Optional[pd.DataFrame],
+    df_4h: Optional[pd.DataFrame] = None,
+    minute_df: Optional[pd.DataFrame] = None,
+) -> Tuple[float, str]:
+    """Spot for Discord/X: live USD, else last 1H/1m close. 4H is last resort."""
+    hourly_close = _last_close(hourly)
+    minute_close = _last_close(minute_df)
+
+    live = fetch_live_price(coin, "USD")
+    if live is None:
+        live = fetch_live_price(coin, "USDT")
+        live_label = "live USDT"
+    else:
+        live_label = "live USD"
+
+    ref = minute_close or hourly_close
+    if live is not None and ref is not None:
+        if abs(live / ref - 1.0) > LIVE_VS_HOURLY_MAX_DIVERGENCE:
+            src = "1m close" if minute_close is not None else "1H close"
+            print(f"⚠️  {coin}: {live_label} {live:.6f} vs {src} {ref:.6f} (>4%) — using {src}")
+            return ref, src
+        print(f"✓ {coin}: {live_label} {live:.6f} (ref {ref:.6f})")
+        return live, live_label
+
+    if live is not None:
+        print(f"✓ {coin}: {live_label} {live:.6f} (no candle ref)")
+        return live, live_label
+
+    if minute_close is not None:
+        print(f"⚠️  {coin}: live unavailable — using 1m close {minute_close:.6f}")
+        return minute_close, "1m close"
+
+    if hourly_close is not None:
+        print(f"⚠️  {coin}: live unavailable — using 1H close {hourly_close:.6f}")
+        return hourly_close, "1H close"
+
+    four_close = _last_close(df_4h)
+    if four_close is not None:
+        print(f"⚠️  {coin}: live/1H unavailable — using 4H close {four_close:.6f}")
+        return four_close, "4H close"
+
+    raise ValueError(f"{coin}: no price source available")
+
+
+def calc_change_24h(price: float, hourly: Optional[pd.DataFrame]) -> float:
+    if hourly is None or len(hourly) < 25:
+        return 0.0
+    try:
+        base = float(hourly["close"].iloc[-25])
+    except Exception:
+        return 0.0
+    if not np.isfinite(base) or base <= 0 or not np.isfinite(price) or price <= 0:
+        return 0.0
+    return (price / base - 1.0) * 100.0
 
 
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
@@ -479,7 +562,7 @@ def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Opti
         return None
 
 
-def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USDT") -> Optional[pd.DataFrame]:
+def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USD") -> Optional[pd.DataFrame]:
     last_err: Optional[Exception] = None
     quotes = list(dict.fromkeys([tsym, "USD", "USDT"]))
     for quote in quotes:
@@ -847,7 +930,6 @@ def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[f
         cleaned.append(float(v))
     cleaned.sort(reverse=(side == "res"))
     return cleaned[:2]
-
 
 
 def build_volume_profile(
@@ -1511,7 +1593,7 @@ def send_surge_alert(coin: str, surge_pct: float, price: float, direction: str) 
     color   = 0x00FF00 if direction == "up" else 0xFF0000
     embed   = DiscordEmbed(title=title, description=f"**{surge_pct:+.2f}%** in last hour", color=color)
     embed.set_thumbnail(url=COINS[coin]["thumb"])
-    embed.add_embed_field(name="Price", value=f"${price:,.6f}", inline=True)
+    embed.add_embed_field(name="Price", value=_fmt_px(price), inline=True)
     embed.set_footer(text=f"Surge Alert • {now_est.strftime('%I:%M %p %Z')}")
     embed.set_timestamp()
     webhook.add_embed(embed)
@@ -1669,7 +1751,7 @@ def render_single_timeframe_chart(df: pd.DataFrame, title: str, out_path: str) -
         type="candle",
         addplot=addplots if addplots else None,
         volume="Volume" in mpf_df.columns,
-        title=f"{title}   |   ${last_price:,.4f}",
+        title=f"{title}   |   {_fmt_px(last_price)}",
         ylabel="Price",
         ylabel_lower="Volume",
         panel_ratios=(5, 2, 2),
@@ -1822,9 +1904,15 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     if not webhook_url or df_4h is None or df_4h.empty:
         return False
 
-    live_price = fetch_live_price(coin, "USD")
-    price = live_price if live_price is not None else float(df_4h["close"].iloc[-1])
-    change_24h = (price / float(hourly["close"].iloc[-25]) - 1) * 100 if len(hourly) >= 25 else 0.0
+    limit_15m = int(config.get("histominute_limit_15m", 300))
+    limit_5m  = int(config.get("histominute_limit_5m", 300))
+    df_15m = fetch_histominute(coin, aggregate=15, limit=limit_15m)
+    time.sleep(0.4)
+    df_5m = fetch_histominute(coin, aggregate=5, limit=limit_5m)
+
+    price, price_src = resolve_spot_price(coin, hourly, df_4h=df_4h, minute_df=df_15m)
+    change_24h = calc_change_24h(price, hourly)
+    print(f"✓ {coin}: report price {price:.6f} ({price_src})  24h {change_24h:+.2f}%")
 
     bb           = bollinger_analysis(df_4h)
     vol_4h       = volume_analysis(df_4h)
@@ -1835,12 +1923,6 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     daily_struct = market_structure(df_daily, "Daily")
     h4_struct    = market_structure(df_4h, "4H")
     bias_1h      = run_scalper_ema(hourly)
-
-    limit_15m = int(config.get("histominute_limit_15m", 300))
-    limit_5m  = int(config.get("histominute_limit_5m", 300))
-    df_15m = fetch_histominute(coin, aggregate=15, limit=limit_15m)
-    time.sleep(0.4)
-    df_5m = fetch_histominute(coin, aggregate=5, limit=limit_5m)
 
     has_15m = df_15m is not None and not df_15m.empty and len(df_15m) >= 21
     has_5m  = df_5m is not None and not df_5m.empty and len(df_5m) >= 21
@@ -1876,7 +1958,11 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
     embed   = DiscordEmbed(title=f"{coin} Market Report", color=COINS[coin]["color"])
     embed.set_thumbnail(url=COINS[coin]["thumb"])
-    embed.add_embed_field(name="💰 Price",      value=f"${price:,.4f}\n24H: `{change_24h:+.2f}%`", inline=True)
+    embed.add_embed_field(
+        name="💰 Price",
+        value=f"{_fmt_px(price)}\n24H: `{change_24h:+.2f}%`",
+        inline=True,
+    )
     embed.add_embed_field(name="📊 RSI",        value=f"4H: {rsi_4h_label}\n15m: {rsi_15m_label}", inline=True)
     embed.add_embed_field(name="📈 Volatility", value=f"BB Pos: {bb['dist_pct']:.1f}%\n{bb['squeeze']}\n{bb['breakout']}", inline=True)
     if vol_4h["label"] != "No Data":
@@ -1925,7 +2011,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Crypto Intelligence • {now_est.strftime('%I:%M %p %Z')}")
+    embed.set_footer(text=f"Crypto Intelligence • {price_src} • {now_est.strftime('%I:%M %p %Z')}")
     embed.set_timestamp()
 
     discord_chart_paths = build_discord_chart_images(coin, df_daily, df_4h, hourly, df_15m)
@@ -1966,7 +2052,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
             tweet_time = now_est.strftime("%I:%M%p").lstrip("0")
             tweet = (
                 f"📊 ${coin} {tweet_time}\n"
-                f"💰 ${price:,.4f} ({change_24h:+.2f}%)\n"
+                f"💰 {_fmt_px(price)} ({change_24h:+.2f}%)\n"
                 f"🧭 {condition}\n"
                 f"🎯 {pos_out['headline']} ({position_confidence}%)\n"
                 f"⚡ {scalp_out['headline']} ({scalper_confidence}%)\n"
