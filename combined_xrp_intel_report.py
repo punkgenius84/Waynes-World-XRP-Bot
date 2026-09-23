@@ -17,10 +17,11 @@ Core philosophy unchanged:
 - Key Levels from confirmed Daily/4H swings + descriptive break/loss language.
 
 2026-09-23 price fixes:
-- Live USD first; never treat 4H close as spot if 1H exists.
+- Live USD first; never treat 4H close as spot if 1H/1m exists.
 - Histohour/histominute quote USD before USDT.
-- Reject live ticks that diverge >4% from last 1H close.
+- Reject live ticks that diverge >4% from last candle close.
 - 24h % uses the same spot vs hourly close ~24h ago.
+- Coinbase hourly fallback when CryptoCompare is rate-limited.
 """
 
 from __future__ import annotations
@@ -92,6 +93,9 @@ CRYPTOCOMPARE_PRICE      = "https://min-api.cryptocompare.com/data/price"
 NEWS_ENDPOINT             = "https://min-api.cryptocompare.com/data/v2/news/"
 
 LIVE_VS_HOURLY_MAX_DIVERGENCE = 0.04
+
+COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
+_COINBASE_GRANULARITY_SEC = {1: 60, 5: 300, 15: 900, 60: 3600, 360: 21600, 1440: 86400}
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -400,45 +404,126 @@ def _fetch_histohour_raw(coin: str, limit: int = 2000) -> List[dict]:
     return []
 
 
+def _coinbase_candles_request(
+    coin: str,
+    granularity: int,
+    tsym: str = "USD",
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Optional[pd.DataFrame]:
+    product_id = f"{coin.upper()}-{tsym.upper()}"
+    params: Dict[str, Any] = {"granularity": int(granularity)}
+    if start is not None:
+        params["start"] = start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if end is not None:
+        params["end"] = end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        r = requests.get(
+            COINBASE_CANDLES_URL.format(product_id=product_id),
+            params=params,
+            headers={"User-Agent": "CryptoIntelBot/2.0 (Coinbase fallback)"},
+            timeout=15,
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            return pd.DataFrame(columns=_HIST_COLS)
+        df = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        for c in ("open", "high", "low", "close", "volume"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=["close"]).sort_values("timestamp").drop_duplicates("timestamp")
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    except Exception as e:
+        print(f"⚠️  {coin}: Coinbase candles fetch failed (gran={granularity}) → {e}")
+        return None
+
+
+def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Optional[pd.DataFrame]:
+    granularity = _COINBASE_GRANULARITY_SEC.get(int(aggregate))
+    if granularity is None:
+        return None
+    df = _coinbase_candles_request(coin, granularity, tsym=tsym)
+    if df is None or df.empty:
+        return None
+    return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+
+
+def fetch_coinbase_hourly(coin: str, lookback_hours: int = 1800, tsym: str = "USD") -> Optional[pd.DataFrame]:
+    """Page Coinbase 1H candles. ~300 bars per call."""
+    granularity = 3600
+    max_per_call = 300
+    end = datetime.now(timezone.utc)
+    start_limit = end - timedelta(hours=int(lookback_hours))
+    frames: List[pd.DataFrame] = []
+    guard = 0
+    while end > start_limit and guard < 12:
+        guard += 1
+        start = max(start_limit, end - timedelta(hours=max_per_call))
+        df = _coinbase_candles_request(coin, granularity, tsym=tsym, start=start, end=end)
+        if df is None:
+            break
+        if df.empty:
+            end = start
+            continue
+        frames.append(df)
+        oldest = df["timestamp"].min().to_pydatetime()
+        if oldest.tzinfo is None:
+            oldest = oldest.replace(tzinfo=timezone.utc)
+        if oldest <= start_limit or len(df) < 2:
+            break
+        end = oldest - timedelta(seconds=1)
+        time.sleep(0.15)
+    if not frames:
+        return None
+    out = pd.concat(frames, ignore_index=True)
+    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
+    out = out.sort_values("timestamp").drop_duplicates("timestamp")
+    print(f"✓ {coin}: Coinbase hourly fallback ({len(out)} bars)")
+    return out
+
+
 def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     history_df = safe_load_history(coin)
     hour_limit = 72 if len(history_df) >= 200 else 2000
+    df_new = pd.DataFrame(columns=_HIST_COLS)
+
     try:
         data_points = _fetch_histohour_raw(coin, limit=hour_limit)
-        if not data_points:
-            raise ValueError("Empty histohour data")
-
-        df_new = _cc_to_ohlcv_df(data_points)
-        if df_new.empty:
-            raise ValueError("Empty histohour dataframe")
-
-        combined = pd.concat([history_df, df_new], ignore_index=True)
-        combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True)
-        combined = combined.sort_values("timestamp").drop_duplicates("timestamp")
-        safe_save_history(coin, combined)
-
-        hourly   = combined.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
-        df_4h    = hourly.resample("4h").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        df_daily = hourly.resample("1D").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-
-        print(f"✓ {coin}: {len(hourly)} hourly bars (fetched {hour_limit})")
-        return hourly, df_4h, df_daily
+        if data_points:
+            df_new = _cc_to_ohlcv_df(data_points)
     except Exception as e:
-        print(f"⚠️  {coin}: histohour failed → {e} (fallback local)")
+        print(f"⚠️  {coin}: histohour failed → {e}")
+
+    if df_new is None or df_new.empty:
+        print(f"⚠️  {coin}: CryptoCompare hourly empty — trying Coinbase")
+        cb = fetch_coinbase_hourly(coin, lookback_hours=1800, tsym="USD")
+        if cb is not None and not cb.empty:
+            df_new = cb
+
+    if df_new is None or df_new.empty:
+        print(f"⚠️  {coin}: no remote hourly — fallback local CSV only")
         if history_df.empty:
             return None, None, None
-        hourly   = history_df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
-        df_4h    = hourly.resample("4h").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        df_daily = hourly.resample("1D").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        return hourly, df_4h, df_daily
+        combined = history_df
+    else:
+        combined = pd.concat([history_df, df_new], ignore_index=True)
+
+    combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True)
+    combined = combined.sort_values("timestamp").drop_duplicates("timestamp")
+    safe_save_history(coin, combined)
+
+    hourly = combined.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+    df_4h = hourly.resample("4h").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    ).dropna()
+    df_daily = hourly.resample("1D").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    ).dropna()
+    print(f"✓ {coin}: {len(hourly)} hourly bars | 4H {len(df_4h)} | Daily {len(df_daily)}")
+    return hourly, df_4h, df_daily
 
 
 def fetch_live_price(coin: str, tsym: str = "USD") -> Optional[float]:
@@ -527,39 +612,6 @@ def calc_change_24h(price: float, hourly: Optional[pd.DataFrame]) -> float:
     if not np.isfinite(base) or base <= 0 or not np.isfinite(price) or price <= 0:
         return 0.0
     return (price / base - 1.0) * 100.0
-
-
-COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
-_COINBASE_GRANULARITY_SEC = {1: 60, 5: 300, 15: 900, 60: 3600, 360: 21600, 1440: 86400}
-
-
-def fetch_coinbase_candles(coin: str, aggregate: int, tsym: str = "USD") -> Optional[pd.DataFrame]:
-    granularity = _COINBASE_GRANULARITY_SEC.get(int(aggregate))
-    if granularity is None:
-        return None
-    product_id = f"{coin.upper()}-{tsym.upper()}"
-    try:
-        r = requests.get(
-            COINBASE_CANDLES_URL.format(product_id=product_id),
-            params={"granularity": granularity},
-            headers={"User-Agent": "CryptoIntelBot/2.0 (Coinbase fallback)"},
-            timeout=15,
-        )
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        rows = r.json()
-        if not rows:
-            return None
-        df = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
-        for c in ("open", "high", "low", "close", "volume"):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna(subset=["close"]).sort_values("timestamp").drop_duplicates("timestamp")
-        return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
-    except Exception as e:
-        print(f"⚠️  {coin}: Coinbase candles fetch failed (agg={aggregate}) → {e}")
-        return None
 
 
 def fetch_histominute(coin: str, aggregate: int, limit: int, tsym: str = "USD") -> Optional[pd.DataFrame]:
@@ -938,11 +990,6 @@ def build_volume_profile(
     n_bins: int = 48,
     va_pct: float = 0.70,
 ) -> Dict[str, Any]:
-    """Approximate visible-range volume profile from hourly OHLCV.
-
-    Each bar's volume is spread evenly across the price bins it traded through.
-    Not tick-accurate. Good enough for POC / value area on a Discord card.
-    """
     empty = {"ok": False, "poc": None, "vah": None, "val": None, "days": lookback_days}
     if hourly is None or hourly.empty or "volume" not in hourly.columns:
         return empty
@@ -2099,6 +2146,10 @@ if __name__ == "__main__":
                 minute_df = fetch_histominute(coin, aggregate=1, limit=60)
                 small = _cc_to_ohlcv_df(_fetch_histohour_raw(coin, limit=3)) if minute_df is None else None
                 hourly = small.set_index("timestamp") if (small is not None and not small.empty) else None
+                if hourly is None:
+                    cb = fetch_coinbase_hourly(coin, lookback_hours=6, tsym="USD")
+                    if cb is not None and not cb.empty:
+                        hourly = cb.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
                 if minute_df is None and hourly is None:
                     print(f"⚠️  {coin}: No data, skipping")
                     continue
