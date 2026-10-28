@@ -2,10 +2,25 @@ import unittest
 
 import pandas as pd
 
-from combined_xrp_intel_report import _format_swing_pair, _last_swing_dates, _uniq_levels
+from combined_xrp_intel_report import _format_swing_pair, _last_swing_dates, _recent_daily_range, _uniq_levels
 
 
 class KeyLevelTests(unittest.TestCase):
+    def test_recent_daily_range_uses_latest_20_bars_not_old_extremes(self):
+        index = pd.date_range("2026-01-01", periods=30, freq="D")
+        highs = [1.50] * 30
+        lows = [1.20] * 30
+        highs[2] = 2.00
+        lows[3] = 0.80
+        highs[-1] = 1.40
+        lows[-1] = 1.25
+        df = pd.DataFrame({"high": highs, "low": lows}, index=index)
+
+        self.assertEqual(_recent_daily_range(df, lookback=20), (1.5, 1.2))
+
+    def test_recent_daily_range_handles_missing_data(self):
+        self.assertEqual(_recent_daily_range(None), (None, None))
+
     def test_resistance_is_sorted_nearest_first(self):
         self.assertEqual(
             _uniq_levels([1.50, 1.40, 1.35, 1.20], price=1.33, side="res"),
