@@ -43,7 +43,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Sanity check (compile)
-        run: python -m compileall -q combined_xrp_intel_report.py strategies
+        run: python -m compileall -q combined_xrp_intel_report.py strategies tests
+
+      - name: Test key-level calculations
+        run: python -m unittest discover -s tests -v
 
       - name: Run XRP Empire Bot (full report)
         env:
