@@ -20,8 +20,8 @@ class KeyLevelTests(unittest.TestCase):
 
     def test_swing_dates_are_reported_for_confirmed_pivots(self):
         index = pd.date_range("2026-01-01", periods=90, freq="D")
-        highs = [10.0] * 90
-        lows = [8.0] * 90
+        highs = [10.0 + i * 0.001 for i in range(90)]
+        lows = [8.0 + i * 0.001 for i in range(90)]
         highs[40] = 20.0
         lows[60] = 1.0
         df = pd.DataFrame(
