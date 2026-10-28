@@ -929,6 +929,24 @@ def _last_swings(df: Optional[pd.DataFrame], timeframe: str) -> Tuple[Optional[f
         return None, None
 
 
+def _recent_daily_range(
+    df_daily: Optional[pd.DataFrame], lookback: int = 20
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return the high/low over the latest daily bars, independent of older swing pivots."""
+    if df_daily is None or df_daily.empty or not {"high", "low"}.issubset(df_daily.columns):
+        return None, None
+    try:
+        recent = df_daily.tail(max(1, int(lookback)))
+        highs = pd.to_numeric(recent["high"], errors="coerce").dropna()
+        lows = pd.to_numeric(recent["low"], errors="coerce").dropna()
+        if highs.empty or lows.empty:
+            return None, None
+        high, low = float(highs.max()), float(lows.min())
+        return (high, low) if high > low else (None, None)
+    except Exception:
+        return None, None
+
+
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
     if hourly is None or hourly.empty:
@@ -1144,10 +1162,13 @@ def build_levels_block(
     else:
         lines.append("Support: none nearby")
 
-    if d_hi is not None and d_lo is not None:
-        mid = (d_hi + d_lo) / 2.0
+    range_hi, range_lo = _recent_daily_range(df_daily, lookback=20)
+    if range_hi is not None and range_lo is not None:
+        mid = (range_hi + range_lo) / 2.0
+        span_pct = ((range_hi - range_lo) / mid) * 100.0 if mid > 0 else 0.0
         lines.append(
-            f"Daily range {_fmt_px(d_lo)}–{_fmt_px(d_hi)} • mid {_fmt_px(mid)} • {_range_location(price, d_hi, d_lo)}"
+            f"20D range {_fmt_px(range_lo)}–{_fmt_px(range_hi)} • mid {_fmt_px(mid)} "
+            f"• width {span_pct:.1f}% • {_range_location(price, range_hi, range_lo)}"
         )
     if h_hi is not None and h_lo is not None:
         lines.append(f"4H swings {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
@@ -1211,7 +1232,8 @@ def classify_market_condition(
     both_bull = "Bullish" in (daily_struct or "") and "Bullish" in (h4_struct or "")
     both_bear = "Bearish" in (daily_struct or "") and "Bearish" in (h4_struct or "")
     d_hi, d_lo = _last_swings(df_daily, "Daily")
-    loc = _range_location(price, d_hi, d_lo)
+    range_hi, range_lo = _recent_daily_range(df_daily, lookback=20)
+    loc = _range_location(price, range_hi, range_lo)
     bo = (bb or {}).get("breakout", "")
     dist = float((bb or {}).get("dist_pct", 50) or 50)
 
