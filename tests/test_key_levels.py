@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from combined_xrp_intel_report import _last_swing_dates, _uniq_levels
+from combined_xrp_intel_report import _format_swing_pair, _last_swing_dates, _uniq_levels
 
 
 class KeyLevelTests(unittest.TestCase):
@@ -33,6 +33,18 @@ class KeyLevelTests(unittest.TestCase):
 
         self.assertEqual(high_date, "2026-02-10")
         self.assertEqual(low_date, "2026-03-02")
+
+    def test_swing_pivots_pair_prices_with_dates(self):
+        self.assertEqual(
+            _format_swing_pair(1.6581, "2026-09-23", 1.2460, "2026-09-16"),
+            "high $1.6581 (2026-09-23) / low $1.2460 (2026-09-16)",
+        )
+
+    def test_swing_pivot_handles_missing_date(self):
+        self.assertEqual(
+            _format_swing_pair(1.3982, None, 1.2530, "2026-10-24"),
+            "high $1.3982 (date unavailable) / low $1.2530 (2026-10-24)",
+        )
 
     def test_swing_dates_gracefully_handle_missing_data(self):
         self.assertEqual(_last_swing_dates(None, "Daily"), (None, None))

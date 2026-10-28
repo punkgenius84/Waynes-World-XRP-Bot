@@ -1005,6 +1005,23 @@ def _last_swing_dates(
         return None, None
 
 
+def _format_swing_pair(
+    high: Optional[float],
+    high_date: Optional[str],
+    low: Optional[float],
+    low_date: Optional[str],
+) -> str:
+    """Format swing pivot prices with their dates so the levels are auditable."""
+    parts = []
+    if high is not None or high_date:
+        value = _fmt_px(high) if high is not None else "n/a"
+        parts.append(f"high {value} ({high_date or 'date unavailable'})")
+    if low is not None or low_date:
+        value = _fmt_px(low) if low is not None else "n/a"
+        parts.append(f"low {value} ({low_date or 'date unavailable'})")
+    return " / ".join(parts)
+
+
 def build_volume_profile(
     hourly: Optional[pd.DataFrame],
     lookback_days: int = 60,
@@ -1137,20 +1154,12 @@ def build_levels_block(
 
     d_hi_date, d_lo_date = _last_swing_dates(df_daily, "Daily")
     h_hi_date, h_lo_date = _last_swing_dates(df_4h, "4H")
-    dated_swings = []
-    if d_hi_date or d_lo_date:
-        dated_swings.append(
-            "Daily swing dates: "
-            + "high " + (d_hi_date or "n/a")
-            + " / low " + (d_lo_date or "n/a")
-        )
-    if h_hi_date or h_lo_date:
-        dated_swings.append(
-            "4H swing dates: "
-            + "high " + (h_hi_date or "n/a")
-            + " / low " + (h_lo_date or "n/a")
-        )
-    lines.extend(dated_swings)
+    daily_swing_label = _format_swing_pair(d_hi, d_hi_date, d_lo, d_lo_date)
+    h4_swing_label = _format_swing_pair(h_hi, h_hi_date, h_lo, h_lo_date)
+    if daily_swing_label:
+        lines.append("Daily swing pivots: " + daily_swing_label)
+    if h4_swing_label:
+        lines.append("4H swing pivots: " + h4_swing_label)
 
     if res:
         lines.append(f"Break above {_fmt_px(res[0])} → structure improving")
