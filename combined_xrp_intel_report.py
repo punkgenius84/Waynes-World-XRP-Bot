@@ -969,6 +969,7 @@ def _range_location(price: float, high: Optional[float], low: Optional[float]) -
 
 
 def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[float]:
+    """Return the nearest distinct levels first: resistance ascending, support descending."""
     cleaned: List[float] = []
     for v in vals:
         if v is None or not np.isfinite(v):
@@ -980,8 +981,28 @@ def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[f
         if any(abs(v - x) / max(x, 1e-9) < 0.004 for x in cleaned):
             continue
         cleaned.append(float(v))
-    cleaned.sort(reverse=(side == "res"))
+    # The first level drives the "Break above" / "Loss of" guidance below.
+    cleaned.sort(reverse=(side == "sup"))
     return cleaned[:2]
+
+
+def _last_swing_dates(
+    df: Optional[pd.DataFrame], timeframe: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return the dates of the latest confirmed swing high and low."""
+    if df is None or len(df) < 30 or not isinstance(df.index, pd.DatetimeIndex):
+        return None, None
+    window = 10 if timeframe == "Daily" else 15
+    try:
+        high_roll = df["high"].rolling(2 * window + 1, center=True).max()
+        low_roll = df["low"].rolling(2 * window + 1, center=True).min()
+        highs = df.index[(df["high"] == high_roll).fillna(False)]
+        lows = df.index[(df["low"] == low_roll).fillna(False)]
+        high_date = pd.Timestamp(highs[-1]).strftime("%Y-%m-%d") if len(highs) else None
+        low_date = pd.Timestamp(lows[-1]).strftime("%Y-%m-%d") if len(lows) else None
+        return high_date, low_date
+    except Exception:
+        return None, None
 
 
 def build_volume_profile(
@@ -1113,6 +1134,23 @@ def build_levels_block(
         )
     if h_hi is not None and h_lo is not None:
         lines.append(f"4H swings {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
+
+    d_hi_date, d_lo_date = _last_swing_dates(df_daily, "Daily")
+    h_hi_date, h_lo_date = _last_swing_dates(df_4h, "4H")
+    dated_swings = []
+    if d_hi_date or d_lo_date:
+        dated_swings.append(
+            "Daily swing dates: "
+            + "high " + (d_hi_date or "n/a")
+            + " / low " + (d_lo_date or "n/a")
+        )
+    if h_hi_date or h_lo_date:
+        dated_swings.append(
+            "4H swing dates: "
+            + "high " + (h_hi_date or "n/a")
+            + " / low " + (h_lo_date or "n/a")
+        )
+    lines.extend(dated_swings)
 
     if res:
         lines.append(f"Break above {_fmt_px(res[0])} → structure improving")
@@ -2134,6 +2172,11 @@ if __name__ == "__main__":
     coins_to_process = ["XRP"]
 
     print(f"GITHUB_EVENT={github_event!r} | mode={'surge' if surge_only else 'report'} | forced={is_forced} | scheduled={is_scheduled}")
+    # Report configuration status without exposing the secret itself.
+    print(
+        "CryptoCompare API key: "
+        + ("configured (value hidden)" if os.getenv("CRYPTOCOMPARE_API_KEY", "").strip() else "MISSING")
+    )
     print(f"coins={coins_to_process} (count={len(coins_to_process)})")
     print("-" * 60)
 
