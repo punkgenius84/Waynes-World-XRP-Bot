@@ -2172,6 +2172,11 @@ if __name__ == "__main__":
     coins_to_process = ["XRP"]
 
     print(f"GITHUB_EVENT={github_event!r} | mode={'surge' if surge_only else 'report'} | forced={is_forced} | scheduled={is_scheduled}")
+    # Report configuration status without exposing the secret itself.
+    print(
+        "CryptoCompare API key: "
+        + ("configured (value hidden)" if os.getenv("CRYPTOCOMPARE_API_KEY", "").strip() else "MISSING")
+    )
     print(f"coins={coins_to_process} (count={len(coins_to_process)})")
     print("-" * 60)
 
