@@ -500,5 +500,27 @@
     "https://cointelegraph.com/news/mastercard-stablecoin-settlement-sofiusd-explained?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound": "2026-04-20T13:00:34.058038-04:00",
     "https://decrypt.co/364866/coinbase-tests-ai-agents-modeled-on-legendary-former-execs": "2026-04-20T13:00:34.058038-04:00",
     "https://cryptonews.com/news/layerzero-lazarus-kelp-dao-exploit/": "2026-04-20T13:00:34.058038-04:00"
+  },
+  "invalidation_history": {
+    "Daily": {
+      "direction": "RANGE",
+      "last_change": null
+    },
+    "4H": {
+      "direction": "BEARISH",
+      "last_change": null
+    },
+    "1H": {
+      "direction": "BULLISH",
+      "last_change": null
+    },
+    "15m": {
+      "direction": "BEARISH",
+      "last_change": null
+    },
+    "5m": {
+      "direction": "BEARISH",
+      "last_change": null
+    }
   }
 }
