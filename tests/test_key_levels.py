@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from combined_xrp_intel_report import _format_swing_pair, _last_swing_dates, _recent_daily_range, _uniq_levels
+from combined_xrp_intel_report import (\n    _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,\n    _structural_validation_lines, _uniq_levels,\n)
 
 
 class KeyLevelTests(unittest.TestCase):
@@ -20,6 +20,30 @@ class KeyLevelTests(unittest.TestCase):
 
     def test_recent_daily_range_handles_missing_data(self):
         self.assertEqual(_recent_daily_range(None), (None, None))
+
+    def test_range_width_is_percentage_of_midpoint(self):
+        self.assertAlmostEqual(_range_width_pct(1.3982, 1.1980), 15.42, places=2)
+
+    def test_range_width_rejects_invalid_bounds(self):
+        self.assertEqual(_range_width_pct(1.2, 1.4), 0.0)
+
+    def test_bullish_daily_structure_uses_lower_pivot_as_invalidation(self):
+        self.assertEqual(
+            _structural_validation_lines("Bullish (HH+HL)", 1.65, 1.24),
+            ["Bullish Daily structure invalidated: 4H close below Daily swing low $1.2400"],
+        )
+
+    def test_bearish_daily_structure_uses_upper_pivot_as_invalidation(self):
+        self.assertEqual(
+            _structural_validation_lines("Bearish (LH+LL)", 1.65, 1.24),
+            ["Bearish Daily structure invalidated: 4H close above Daily swing high $1.6500"],
+        )
+
+    def test_ranging_daily_structure_describes_two_range_breaks_not_invalidation(self):
+        self.assertEqual(
+            _structural_validation_lines("Ranging/Choppy — Sideways", 1.65, 1.24),
+            ["Daily range boundary: 4H close below $1.2400 breaks lower / above $1.6500 breaks higher"],
+        )
 
     def test_resistance_is_sorted_nearest_first(self):
         self.assertEqual(
