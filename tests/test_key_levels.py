@@ -154,6 +154,19 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(state["invalidation_history"]["Daily"], previous)
         self.assertIn("previous history preserved", text)
 
+    def test_invalidation_status_separates_each_timeframe_with_blank_lines(self):
+        state = {}
+        frame = self._frame(close=1.30)
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "BEARISH"}, {"bias": "NEUTRAL"}, {"bias": "BULLISH"},
+        )
+        self.assertIn("\n\n4H ", text)
+        self.assertIn("\n\n1H ", text)
+        self.assertIn("\n\n15m ", text)
+        self.assertIn("\n\n5m ", text)
+
     def test_ema_shift_is_recorded_separately_from_structure(self):
         state = {"invalidation_history": {"1H": {
             "direction": "BEARISH", "last_checked_candle": "old",
