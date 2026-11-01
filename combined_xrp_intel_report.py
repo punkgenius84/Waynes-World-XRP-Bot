@@ -2305,7 +2305,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
     # Give every timeframe its own full-width Discord field so spacing is
     # preserved visually instead of relying on blank lines inside one field.
-    for status_line in invalidation_text.split("\\n\\n"):
+    for status_line in invalidation_text.split("\n\n"):
         timeframe = status_line.split(" ", 1)[0]
         embed.add_embed_field(
             name=f"🧭 {timeframe} Structure Status",
