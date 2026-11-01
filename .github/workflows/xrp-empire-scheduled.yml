@@ -45,6 +45,9 @@ jobs:
       - name: Sanity check (compile)
         run: python -m compileall -q combined_xrp_intel_report.py strategies tests
 
+      - name: Chart rendering regression test
+        run: python -m unittest discover -s tests -p 'test_chart_rendering.py' -v
+
       - name: Test key-level calculations
         run: python -m unittest discover -s tests -v
 
