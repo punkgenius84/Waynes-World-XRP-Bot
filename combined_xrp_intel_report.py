@@ -1002,15 +1002,27 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         history = {}
         state_data["invalidation_history"] = history
 
-    def close_and_stamp(frame):
-        close, stamp = _frame_close_stamp(frame)
+    def close_and_stamp(frame, interval_minutes):
+        # Exchange candle timestamps mark candle opens. Exclude the currently
+        # forming candle so only a completed close can confirm a boundary break.
+        if frame is None or frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
+            return None, None
+        try:
+            utc_index = pd.to_datetime(frame.index, utc=True)
+            closed_mask = utc_index + pd.to_timedelta(interval_minutes, unit="m") <= pd.Timestamp.now(tz="UTC")
+            completed = frame.loc[closed_mask]
+            if completed.empty:
+                return None, None
+            close, stamp = _frame_close_stamp(completed)
+        except Exception:
+            return None, None
         if close is None or not np.isfinite(close) or close <= 0 or stamp == "unavailable":
             return None, None
         return float(close), stamp
 
     def update_structure(name, pivot_frame, confirmation_frame, label, confirm_rule):
         direction = _structure_direction(label)
-        close, stamp = close_and_stamp(confirmation_frame)
+        close, stamp = close_and_stamp(confirmation_frame, 240)
         if direction == "UNKNOWN" or close is None:
             prior = history.get(name, {})
             prior = prior if isinstance(prior, dict) else {}
@@ -1109,7 +1121,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         ("15m", df_15m, bias_15m),
         ("5m", df_5m, bias_5m),
     ):
-        close, stamp = close_and_stamp(frame)
+        interval_minutes = {"1H": 60, "15m": 15, "5m": 5}[name]
+        close, stamp = close_and_stamp(frame, interval_minutes)
         raw_bias = str((bias or {}).get("bias", "No Data")).strip().upper()
         direction = _bias_kind(raw_bias)
         if close is None or raw_bias in ("", "NO DATA", "N/A", "UNKNOWN") or direction not in ("BULLISH", "BEARISH", "NEUTRAL"):
