@@ -987,14 +987,15 @@ def _range_location(price: float, high: Optional[float], low: Optional[float]) -
 
 
 def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[float]:
-    """Return the nearest distinct levels first: resistance ascending, support descending."""
+    """Return correctly sided, distinct levels: resistance ascending, support descending."""
     cleaned: List[float] = []
     for v in vals:
         if v is None or not np.isfinite(v):
             continue
-        if side == "res" and v < price * 0.995:
+        # Do not label a below-spot level as resistance or an above-spot level as support.
+        if side == "res" and v < price:
             continue
-        if side == "sup" and v > price * 1.005:
+        if side == "sup" and v > price:
             continue
         if any(abs(v - x) / max(x, 1e-9) < 0.004 for x in cleaned):
             continue
