@@ -1110,8 +1110,9 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         ("5m", df_5m, bias_5m),
     ):
         close, stamp = close_and_stamp(frame)
-        direction = _bias_kind(str((bias or {}).get("bias", "No Data")))
-        if close is None or direction not in ("BULLISH", "BEARISH", "NEUTRAL"):
+        raw_bias = str((bias or {}).get("bias", "No Data")).strip().upper()
+        direction = _bias_kind(raw_bias)
+        if close is None or raw_bias in ("", "NO DATA", "N/A", "UNKNOWN") or direction not in ("BULLISH", "BEARISH", "NEUTRAL"):
             prior = history.get(name, {})
             if not isinstance(prior, dict):
                 prior = {}
