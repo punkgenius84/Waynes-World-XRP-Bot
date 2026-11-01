@@ -46,7 +46,7 @@ class KeyLevelTests(unittest.TestCase):
     def test_ranging_daily_structure_describes_two_range_breaks_not_invalidation(self):
         self.assertEqual(
             _structural_validation_lines("Ranging/Choppy — Sideways", 1.65, 1.24),
-            ["Daily range boundary: 4H close below $1.2400 breaks lower / above $1.6500 breaks higher"],
+            ["Daily swing-structure boundary: 4H close below Daily swing low $1.2400 breaks lower / above Daily swing high $1.6500 breaks higher"],
         )
 
     def test_resistance_is_sorted_nearest_first(self):
