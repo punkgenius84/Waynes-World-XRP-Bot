@@ -92,5 +92,134 @@ class KeyLevelTests(unittest.TestCase):
         self.assertEqual(_last_swing_dates(None, "Daily"), (None, None))
 
 
+
+
+class InvalidationHistoryTests(unittest.TestCase):
+    @staticmethod
+    def _frame(close=1.30, periods=45, freq="4h"):
+        index = pd.date_range("2026-10-01", periods=periods, freq=freq, tz="UTC")
+        highs = [1.40] * periods
+        lows = [1.20] * periods
+        # Confirmed swing points well inside the series, with enough bars on
+        # either side for the centered pivot window.
+        highs[20] = 1.60
+        lows[25] = 1.10
+        closes = [1.30] * periods
+        closes[-1] = close
+        return pd.DataFrame(
+            {"open": closes, "high": highs, "low": lows, "close": closes, "volume": [1.0] * periods},
+            index=index,
+        )
+
+    def test_bullish_invalidation_requires_close_below_previous_boundary(self):
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_checked_candle": "old",
+        }}}
+        frame = self._frame(close=1.19)
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        event = state["invalidation_history"]["4H"]["last_invalidation"]
+        self.assertIsNotNone(event)
+        self.assertEqual(event["boundary"], 1.20)
+        self.assertEqual(event["close"], 1.19)
+        self.assertIn("last confirmed invalidation", text)
+
+    def test_wick_below_boundary_does_not_invalidate_when_close_holds(self):
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_checked_candle": "old",
+        }}}
+        frame = self._frame(close=1.21)
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bullish (HH+HL)", "Bullish (HH+HL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertIsNone(state["invalidation_history"]["4H"]["last_invalidation"])
+
+    def test_missing_frame_preserves_previous_structural_state(self):
+        previous = {"direction": "BULLISH", "active_boundary": 1.20,
+                    "last_invalidation": {"at": "2026-10-01 00:00 UTC"}}
+        state = {"invalidation_history": {"Daily": previous.copy()}}
+        text = build_invalidation_status(
+            state, None, None, None, None, None,
+            "No Data", "No Data", {"bias": "No Data"},
+            {"bias": "No Data"}, {"bias": "No Data"},
+        )
+        self.assertEqual(state["invalidation_history"]["Daily"], previous)
+        self.assertIn("previous history preserved", text)
+
+    def test_ema_shift_is_recorded_separately_from_structure(self):
+        state = {"invalidation_history": {"1H": {
+            "direction": "BEARISH", "last_checked_candle": "old",
+        }}}
+        frame = self._frame(close=1.31, freq="1h")
+        text = build_invalidation_status(
+            state, None, None, frame, None, None,
+            "No Data", "No Data", {"bias": "Bullish"},
+            {"bias": "No Data"}, {"bias": "No Data"},
+        )
+        self.assertEqual(state["invalidation_history"]["1H"]["last_bias_shift"]["to"], "BULLISH")
+        self.assertIn("not a structural invalidation", text)
+
+    def test_same_candle_does_not_create_duplicate_invalidation(self):
+        frame = self._frame(close=1.19)
+        stamp = frame.index[-1].strftime("%Y-%m-%d %H:%M UTC")
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_checked_candle": stamp,
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertIsNone(state["invalidation_history"]["4H"]["last_invalidation"])
+
+    def test_forming_four_hour_candle_cannot_confirm_invalidation(self):
+        frame = self._frame(close=1.21)
+        current_bucket = pd.Timestamp.now(tz="UTC").floor("4h")
+        frame.index = frame.index[:-1].append(pd.DatetimeIndex([current_bucket]))
+        frame.iloc[-2, frame.columns.get_loc("close")] = 1.21
+        frame.iloc[-1, frame.columns.get_loc("close")] = 1.19
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_checked_candle": "old",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertIsNone(state["invalidation_history"]["4H"]["last_invalidation"])
+
+
+    def test_same_broken_boundary_is_not_relogged_on_later_candles(self):
+        frame = self._frame(close=1.19)
+        previous_event = {
+            "from": "BULLISH", "to": "BEARISH", "boundary": 1.20,
+            "close": 1.18, "at": "2026-10-07 00:00 UTC",
+            "confirmation": "4H candle close",
+        }
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_invalidation": previous_event,
+            "last_checked_candle": "older candle",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertEqual(
+            state["invalidation_history"]["4H"]["last_invalidation"],
+            previous_event,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
