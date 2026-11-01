@@ -1343,7 +1343,7 @@ def format_volume_profile(price: float, vp: Dict[str, Any]) -> str:
         loc = "inside value"
     return (
         f"POC {_fmt_px(poc)} • VA {_fmt_px(val)}–{_fmt_px(vah)}\n"
-        f"{vp['days']}d hourly • spot {loc} ({_pct_from(price, poc)} vs POC)"
+        f"{vp['days']}d hourly estimate (OHLC-range allocation) • spot {loc} ({_pct_from(price, poc)} vs POC)"
     )
 
 
@@ -2362,8 +2362,8 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
                 f"📊 ${coin} {tweet_time}\n"
                 f"💰 {_fmt_px(price)} ({change_24h:+.2f}%)\n"
                 f"🧭 {condition}\n"
-                f"🎯 {pos_out['headline']} ({position_confidence}%)\n"
-                f"⚡ {scalp_out['headline']} ({scalper_confidence}%)\n"
+                f"🎯 {pos_out['headline']} (strength {position_confidence}/100)\n"
+                f"⚡ {scalp_out['headline']} (strength {scalper_confidence}/100)\n"
                 f"1H:{bias_1h['bias']} 15m:{bias_15m['bias']} 5m:{bias_5m['bias']}\n"
                 f"{tweet_hashtags(coin)}"
             )
