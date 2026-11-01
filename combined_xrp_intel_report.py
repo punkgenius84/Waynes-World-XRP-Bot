@@ -497,8 +497,8 @@ def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame
     except Exception as e:
         print(f"⚠️  {coin}: histohour failed → {e}")
 
-    if df_new is None or df_new.empty:        print(f"⚠️  {coin}: CryptoCompare hourly empty — trying Coinbase")
-        cb = fetch_coinbase_hourly(coin, lookback_hours=1800, tsym="USD")
+    if df_new is None or df_new.empty:
+        print(f"⚠️  {coin}: CryptoCompare hourly empty — trying Coinbase")        cb = fetch_coinbase_hourly(coin, lookback_hours=1800, tsym="USD")
         if cb is not None and not cb.empty:
             df_new = cb
 
@@ -998,7 +998,6 @@ def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]
     except Exception:
         return empty
 
-
 def _range_location(price: float, high: Optional[float], low: Optional[float]) -> str:
     if high is None or low is None or high <= low:
         return "Location unknown"
@@ -1026,7 +1025,8 @@ def _uniq_levels(vals: List[Optional[float]], price: float, side: str) -> List[f
             continue
         if side == "sup" and v > price:
             continue
-        if any(abs(v - x) / max(x, 1e-9) < 0.004 for x in cleaned):            continue
+        if any(abs(v - x) / max(x, 1e-9) < 0.004 for x in cleaned):
+            continue
         cleaned.append(float(v))
     # The first level drives the "Break above" / "Loss of" guidance below.
     cleaned.sort(reverse=(side == "sup"))
@@ -1497,8 +1497,7 @@ def calculate_scalper_confidence(
     dist = float(bb.get("dist_pct", 50))
     if np.isfinite(dist) and dist > 100:
         score -= min(8, (dist - 100) * 0.20)
-    elif np.isfinite(dist) and 55 <= dist <= 80:
-        score += 2
+    elif np.isfinite(dist) and 55 <= dist <= 80:        score += 2
 
     biases = [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")]
     bullish_count = sum("BULLISH" in b for b in biases)
@@ -1997,7 +1996,6 @@ def build_tweet_chart_image(
     if not _charts_available():
         print("ℹ️  Charts skipped (mplfinance/Pillow missing)")
         return None
-
     pathlib.Path("charts").mkdir(exist_ok=True)
 
     def tail(df: Optional[pd.DataFrame], n: int) -> Optional[pd.DataFrame]:
