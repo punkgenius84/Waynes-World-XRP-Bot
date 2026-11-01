@@ -5,7 +5,7 @@ import pandas as pd
 from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
     _structural_validation_lines, _uniq_levels, build_invalidation_status,
-    calculate_market_confidence, calculate_scalper_confidence,
+    calculate_market_confidence, calculate_scalper_confidence, scalper_outlook,
 )
 
 
@@ -46,7 +46,7 @@ class KeyLevelTests(unittest.TestCase):
     def test_ranging_daily_structure_describes_two_range_breaks_not_invalidation(self):
         self.assertEqual(
             _structural_validation_lines("Ranging/Choppy — Sideways", 1.65, 1.24),
-            ["Daily range boundary: 4H close below $1.2400 breaks lower / above $1.6500 breaks higher"],
+            ["Daily swing-structure boundary: 4H close below Daily swing low $1.2400 breaks lower / above Daily swing high $1.6500 breaks higher"],
         )
 
     def test_resistance_is_sorted_nearest_first(self):
@@ -154,6 +154,19 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(state["invalidation_history"]["Daily"], previous)
         self.assertIn("previous history preserved", text)
 
+    def test_invalidation_status_separates_each_timeframe_with_blank_lines(self):
+        state = {}
+        frame = self._frame(close=1.30)
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "BEARISH"}, {"bias": "NEUTRAL"}, {"bias": "BULLISH"},
+        )
+        self.assertIn("\n\n4H ", text)
+        self.assertIn("\n\n1H ", text)
+        self.assertIn("\n\n15m ", text)
+        self.assertIn("\n\n5m ", text)
+
     def test_ema_shift_is_recorded_separately_from_structure(self):
         state = {"invalidation_history": {"1H": {
             "direction": "BEARISH", "last_checked_candle": "old",
@@ -251,6 +264,22 @@ class InvalidationHistoryTests(unittest.TestCase):
         )
         self.assertLess(partial, full)
         self.assertIn("data unavailable", note)
+
+
+    def test_mixed_scalper_labels_five_minute_bullish_as_countertrend_to_bearish_hourly(self):
+        result = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "NEUTRAL"}, {"bias": "BULLISH"},
+            45, {"dist_pct": 43.5}, 35,
+        )
+        self.assertEqual(result["headline"], "MIXED — SHORT-TERM")
+        self.assertEqual(result["five"], "Bullish — countertrend to 1H")
+
+    def test_mixed_scalper_labels_five_minute_bearish_as_countertrend_to_bullish_hourly(self):
+        result = scalper_outlook(
+            {"bias": "BULLISH"}, {"bias": "NEUTRAL"}, {"bias": "BEARISH"},
+            55, {"dist_pct": 43.5}, 35,
+        )
+        self.assertEqual(result["five"], "Bearish — countertrend to 1H")
 
     def test_mixed_higher_timeframe_structure_has_moderate_strength(self):
         score = calculate_market_confidence(

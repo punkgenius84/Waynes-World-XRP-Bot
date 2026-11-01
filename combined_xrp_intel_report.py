@@ -973,8 +973,8 @@ def _structural_validation_lines(
             f"Bearish Daily structure invalidated: 4H close above Daily swing high {_fmt_px(daily_high)}"
         ]
     return [
-        f"Daily range boundary: 4H close below {_fmt_px(daily_low)} breaks lower / "
-        f"above {_fmt_px(daily_high)} breaks higher"
+        f"Daily swing-structure boundary: 4H close below Daily swing low {_fmt_px(daily_low)} "
+        f"breaks lower / above Daily swing high {_fmt_px(daily_high)} breaks higher"
     ]
 
 
@@ -1083,9 +1083,9 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                              if high is not None else "active invalidation boundary unavailable (no confirmed swing high)")
         elif direction == "RANGE":
             boundary_value = None
-            boundary_text = (f"range-break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
+            boundary_text = (f"confirmed Daily swing-pivot break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
                              if high is not None and low is not None else
-                             "range-break boundaries unavailable (insufficient confirmed pivots)")
+                             "confirmed Daily swing-pivot break boundaries unavailable (insufficient pivots)")
         else:
             boundary_value = None
             boundary_text = "active boundary unavailable"
@@ -1158,7 +1158,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
 
-    return "\n".join(lines)
+    # Separate each timeframe into its own readable paragraph in the Discord embed.
+    return "\n\n".join(lines)
 
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
@@ -1828,9 +1829,23 @@ def scalper_outlook(
         headline = "MIXED — SHORT-TERM"
         align = f"1H: {k1} • 15m: {k15}"
         if k5 == "BULLISH":
-            five = "Bullish (Aligned)"
+            if k1 == "BEARISH":
+                five = "Bullish — countertrend to 1H"
+            elif k15 == "BEARISH":
+                five = "Bullish — countertrend to 15m"
+            elif k1 == "BULLISH" or k15 == "BULLISH":
+                five = "Bullish — partial alignment"
+            else:
+                five = "Bullish — 5m only"
         elif k5 == "BEARISH":
-            five = "Bearish (Aligned)"
+            if k1 == "BULLISH":
+                five = "Bearish — countertrend to 1H"
+            elif k15 == "BULLISH":
+                five = "Bearish — countertrend to 15m"
+            elif k1 == "BEARISH" or k15 == "BEARISH":
+                five = "Bearish — partial alignment"
+            else:
+                five = "Bearish — 5m only"
         else:
             five = sig5 or "Neutral"
 
