@@ -1,4 +1,7 @@
-a discord hook for XRP 3-4 hr reports and Alerts
+# XRP Market Report Bot
+
+Automated XRP market analysis and Discord reporting, including multi-timeframe structure, key levels, invalidation status, volume context, and chart output.
+
 
 ## How it runs (GitHub Actions)
 

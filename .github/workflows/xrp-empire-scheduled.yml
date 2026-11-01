@@ -1,5 +1,5 @@
 # path: .github/workflows/xrp-empire-scheduled.yml
-name: XRP Empire — Scheduled Reports
+name: XRP Market Report Bot
 
 on:
   schedule:
