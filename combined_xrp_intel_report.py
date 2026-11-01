@@ -996,53 +996,148 @@ def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str
 
 def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m,
                               daily_struct, h4_struct, bias_1h, bias_15m, bias_5m) -> str:
-    """Persist confirmed structure transitions; keep EMA bias changes distinct."""
+    """Track confirmed boundary breaks and EMA shifts without promoting missing data."""
     history = state_data.setdefault("invalidation_history", {})
-    lines = []
-    frames = [
-        ("Daily", df_daily, daily_struct, True),
-        ("4H", df_4h, h4_struct, True),
-        ("1H", hourly, bias_1h.get("bias", "No Data"), False),
-        ("15m", df_15m, bias_15m.get("bias", "No Data"), False),
-        ("5m", df_5m, bias_5m.get("bias", "No Data"), False),
-    ]
-    for name, frame, label, structural in frames:
-        close, stamp = _frame_close_stamp(frame)
-        direction = _structure_direction(label) if structural else _bias_kind(str(label))
-        previous = history.get(name, {})
-        if not isinstance(previous, dict): previous = {}
-        old = previous.get("direction", "UNKNOWN")
-        valid = ("BULLISH", "BEARISH", "RANGE") if structural else ("BULLISH", "BEARISH", "NEUTRAL")
-        changed = direction in valid and old not in ("UNKNOWN", direction)
-        # A move from RANGE into a trend is a breakout/transition, not an invalidation.
-        invalidated = old in ("BULLISH", "BEARISH") and direction != old
-        if changed and (not structural or invalidated):
-            previous["last_change"] = {"from": old, "to": direction, "at": stamp,
-                                       "close": close, "kind": "structure" if structural else "EMA bias"}
-        record = {"direction": direction, "last_change": previous.get("last_change")}
-        history[name] = record
-        if structural:
-            hi, lo = _last_swings(frame, name)
-            if direction == "BULLISH" and lo is not None:
-                boundary = f"active invalidation: 4H close below {_fmt_px(lo)}" if name == "Daily" else f"active invalidation: close below {_fmt_px(lo)}"
-            elif direction == "BEARISH" and hi is not None:
-                boundary = f"active invalidation: 4H close above {_fmt_px(hi)}" if name == "Daily" else f"active invalidation: close above {_fmt_px(hi)}"
-            elif direction == "RANGE" and hi is not None and lo is not None:
-                boundary = f"range break: close below {_fmt_px(lo)} / above {_fmt_px(hi)}"
-            else:
-                boundary = "active boundary unavailable (insufficient confirmed pivots)"
-            change = record["last_change"]
-            last = (f"last structure change: {change['from']} → {change['to']} at {change['at']} "
-                    f"(close {_fmt_px(change['close']) if change.get('close') else 'n/a'})"
-                    if change and change.get("kind") == "structure" else "last confirmed invalidation: none recorded")
-            lines.append(f"{name} {direction}: {last}; {boundary}")
-        else:
-            change = record["last_change"]
-            last = (f"last bias shift: {change['from']} → {change['to']} at {change['at']}"
-                    if change and change.get("kind") == "EMA bias" else "last bias shift: none recorded")
-            lines.append(f"{name} EMA bias {direction}: {last}; not a higher-TF structure invalidation")
-    return "\n".join(lines)
+    if not isinstance(history, dict):
+        history = {}
+        state_data["invalidation_history"] = history
 
+    def close_and_stamp(frame):
+        close, stamp = _frame_close_stamp(frame)
+        if close is None or not np.isfinite(close) or close <= 0 or stamp == "unavailable":
+            return None, None
+        return float(close), stamp
+
+    def update_structure(name, pivot_frame, confirmation_frame, label, confirm_rule):
+        direction = _structure_direction(label)
+        close, stamp = close_and_stamp(confirmation_frame)
+        if direction == "UNKNOWN" or close is None:
+            prior = history.get(name, {})
+            prior = prior if isinstance(prior, dict) else {}
+            history[name] = prior
+            return f"{name}: status unavailable (insufficient confirmed data); previous history preserved"
+
+        high, low = _last_swings(pivot_frame, name)
+        prior = history.get(name, {})
+        if not isinstance(prior, dict):
+            prior = {}
+
+        old_direction = prior.get("direction", "UNKNOWN")
+        old_boundary = prior.get("active_boundary")
+        last_event = prior.get("last_invalidation")
+        last_change = prior.get("last_structure_change")
+        already_checked = prior.get("last_checked_candle") == stamp
+
+        # The boundary from the preceding run is the one being tested. Never
+        # test a new pivot against the same candle that created/updated it.
+        breached = False
+        breach_side = None
+        if not already_checked and old_direction == "BULLISH" and isinstance(old_boundary, (int, float)):
+            breached = close < float(old_boundary)
+            breach_side = "below" if breached else None
+        elif not already_checked and old_direction == "BEARISH" and isinstance(old_boundary, (int, float)):
+            breached = close > float(old_boundary)
+            breach_side = "above" if breached else None
+
+        if breached:
+            last_event = {
+                "from": old_direction,
+                "to": direction,
+                "boundary": float(old_boundary),
+                "close": close,
+                "at": stamp,
+                "confirmation": confirm_rule,
+            }
+        elif old_direction not in ("UNKNOWN", direction) and not already_checked:
+            last_change = {
+                "from": old_direction, "to": direction, "at": stamp,
+                "close": close, "note": "label transition; prior boundary not breached",
+            }
+
+        if direction == "BULLISH":
+            boundary_value = low
+            boundary_text = (f"active invalidation: {confirm_rule} below {_fmt_px(low)}"
+                             if low is not None else "active invalidation boundary unavailable (no confirmed swing low)")
+        elif direction == "BEARISH":
+            boundary_value = high
+            boundary_text = (f"active invalidation: {confirm_rule} above {_fmt_px(high)}"
+                             if high is not None else "active invalidation boundary unavailable (no confirmed swing high)")
+        elif direction == "RANGE":
+            boundary_value = None
+            boundary_text = (f"range-break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
+                             if high is not None and low is not None else
+                             "range-break boundaries unavailable (insufficient confirmed pivots)")
+        else:
+            boundary_value = None
+            boundary_text = "active boundary unavailable"
+
+        # Keep the last directional boundary while ranging/unknown so the
+        # historical invalidation record remains auditable.
+        if boundary_value is None and direction == "RANGE":
+            stored_boundary = old_boundary
+        else:
+            stored_boundary = boundary_value
+
+        history[name] = {
+            "direction": direction,
+            "active_boundary": stored_boundary,
+            "last_invalidation": last_event,
+            "last_structure_change": last_change,
+            "last_checked_candle": stamp,
+        }
+
+        if last_event:
+            last_text = (
+                f"last confirmed invalidation: {last_event['from']} boundary "
+                f"{_fmt_px(last_event['boundary'])} broken {last_event['confirmation']} "
+                f"{last_event['at']} (close {_fmt_px(last_event['close'])})"
+            )
+        else:
+            last_text = "last confirmed invalidation: none recorded"
+        if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
+            last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
+                          f"at {last_change['at']} (boundary not breached)")
+        return f"{name} {direction}: {last_text}; {boundary_text}"
+
+    lines = [
+        update_structure("Daily", df_daily, df_4h, daily_struct, "4H candle close"),
+        update_structure("4H", df_4h, df_4h, h4_struct, "4H candle close"),
+    ]
+
+    for name, frame, bias in (
+        ("1H", hourly, bias_1h),
+        ("15m", df_15m, bias_15m),
+        ("5m", df_5m, bias_5m),
+    ):
+        close, stamp = close_and_stamp(frame)
+        direction = _bias_kind(str((bias or {}).get("bias", "No Data")))
+        if close is None or direction not in ("BULLISH", "BEARISH", "NEUTRAL"):
+            prior = history.get(name, {})
+            if not isinstance(prior, dict):
+                prior = {}
+            history[name] = prior
+            lines.append(f"{name}: bias unavailable (missing/invalid candle data); previous history preserved")
+            continue
+
+        prior = history.get(name, {})
+        if not isinstance(prior, dict):
+            prior = {}
+        old = prior.get("direction", "UNKNOWN")
+        last_shift = prior.get("last_bias_shift")
+        if old not in ("UNKNOWN", direction) and prior.get("last_checked_candle") != stamp:
+            last_shift = {"from": old, "to": direction, "at": stamp, "close": close}
+        history[name] = {
+            "direction": direction,
+            "last_bias_shift": last_shift,
+            "last_checked_candle": stamp,
+        }
+        last_text = (
+            f"last bias shift: {last_shift['from']} → {last_shift['to']} at {last_shift['at']}"
+            if last_shift else "last bias shift: none recorded"
+        )
+        lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
+
+    return "\n".join(lines)
 
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
