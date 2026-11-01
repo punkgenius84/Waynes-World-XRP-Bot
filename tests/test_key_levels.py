@@ -4,7 +4,7 @@ import pandas as pd
 
 from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
-    _structural_validation_lines, _uniq_levels,
+    _structural_validation_lines, _uniq_levels, build_invalidation_status,
 )
 
 
