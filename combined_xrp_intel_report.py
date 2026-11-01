@@ -1793,11 +1793,16 @@ def tweet_hashtags(coin: str) -> str:
 
 
 def _charts_available() -> bool:
+    """Return chart dependency availability and report the real import failure."""
     try:
         import mplfinance  # noqa: F401
         from PIL import Image  # noqa: F401
         return True
-    except Exception:
+    except Exception as exc:
+        print(
+            "⚠️  Chart dependency check failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return False
 
 
