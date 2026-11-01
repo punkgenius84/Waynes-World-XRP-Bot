@@ -1013,7 +1013,10 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if not isinstance(previous, dict): previous = {}
         old = previous.get("direction", "UNKNOWN")
         valid = ("BULLISH", "BEARISH", "RANGE") if structural else ("BULLISH", "BEARISH", "NEUTRAL")
-        if direction in valid and old not in ("UNKNOWN", direction):
+        changed = direction in valid and old not in ("UNKNOWN", direction)
+        # A move from RANGE into a trend is a breakout/transition, not an invalidation.
+        invalidated = old in ("BULLISH", "BEARISH") and direction != old
+        if changed and (not structural or invalidated):
             previous["last_change"] = {"from": old, "to": direction, "at": stamp,
                                        "close": close, "kind": "structure" if structural else "EMA bias"}
         record = {"direction": direction, "last_change": previous.get("last_change")}
