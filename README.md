@@ -16,5 +16,8 @@ can't tell a surge poll from a report run.
 ## Optional integrations and secrets
 
 `DISCORD_WEBHOOK_XRP` is used for the market report. Optional integrations: set `enable_news: true` and configure `DISCORD_WEBHOOK_NEWS` to enable news collection/posting; set `post_reports_to_x: true` and configure `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, and `X_ACCESS_SECRET` to enable X posting. Both integrations are disabled by default.
+
+To enable the optional integrations later, users can change `enable_news` or `post_reports_to_x` in `config.json` and configure their respective credentials. Leave both settings `false` to keep the bot focused on XRP market reports only.
+
 Optional but recommended: `CRYPTOCOMPARE_API_KEY` (keyless calls from shared runner IPs get throttled).
 Optional: `GH_PAT` (the workflows fall back to the built-in token).
