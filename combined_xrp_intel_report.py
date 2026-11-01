@@ -1828,9 +1828,23 @@ def scalper_outlook(
         headline = "MIXED — SHORT-TERM"
         align = f"1H: {k1} • 15m: {k15}"
         if k5 == "BULLISH":
-            five = "Bullish (Aligned)"
+            if k1 == "BEARISH":
+                five = "Bullish — countertrend to 1H"
+            elif k15 == "BEARISH":
+                five = "Bullish — countertrend to 15m"
+            elif k1 == "BULLISH" or k15 == "BULLISH":
+                five = "Bullish — partial alignment"
+            else:
+                five = "Bullish — 5m only"
         elif k5 == "BEARISH":
-            five = "Bearish (Aligned)"
+            if k1 == "BULLISH":
+                five = "Bearish — countertrend to 1H"
+            elif k15 == "BULLISH":
+                five = "Bearish — countertrend to 15m"
+            elif k1 == "BEARISH" or k15 == "BEARISH":
+                five = "Bearish — partial alignment"
+            else:
+                five = "Bearish — 5m only"
         else:
             five = sig5 or "Neutral"
 
