@@ -2303,7 +2303,15 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
-    embed.add_embed_field(name="🧭 Invalidation & Structure Status", value=invalidation_text[:1024], inline=False)
+    # Give every timeframe its own full-width Discord field so spacing is
+    # preserved visually instead of relying on blank lines inside one field.
+    for status_line in invalidation_text.split("\n\n"):
+        timeframe = status_line.split(" ", 1)[0]
+        embed.add_embed_field(
+            name=f"🧭 {timeframe} Structure Status",
+            value=status_line[:1024],
+            inline=False,
+        )
     embed.add_embed_field(name="📦 Estimated Volume Profile", value=vp_text[:1024], inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
