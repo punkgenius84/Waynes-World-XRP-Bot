@@ -973,8 +973,8 @@ def _structural_validation_lines(
             f"Bearish Daily structure invalidated: 4H close above Daily swing high {_fmt_px(daily_high)}"
         ]
     return [
-        f"Daily range boundary: 4H close below {_fmt_px(daily_low)} breaks lower / "
-        f"above {_fmt_px(daily_high)} breaks higher"
+        f"Daily swing-structure boundary: 4H close below Daily swing low {_fmt_px(daily_low)} "
+        f"breaks lower / above Daily swing high {_fmt_px(daily_high)} breaks higher"
     ]
 
 
@@ -1083,9 +1083,9 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                              if high is not None else "active invalidation boundary unavailable (no confirmed swing high)")
         elif direction == "RANGE":
             boundary_value = None
-            boundary_text = (f"range-break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
+            boundary_text = (f"confirmed Daily swing-pivot break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
                              if high is not None and low is not None else
-                             "range-break boundaries unavailable (insufficient confirmed pivots)")
+                             "confirmed Daily swing-pivot break boundaries unavailable (insufficient pivots)")
         else:
             boundary_value = None
             boundary_text = "active boundary unavailable"
