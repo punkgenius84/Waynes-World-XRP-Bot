@@ -61,7 +61,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "surge_threshold_pct": 5.0,
     "surge_cooldown_hours": 2,
     "history_max_rows": 10000,
-    "post_reports_to_x": True,
+    "post_reports_to_x": False,
+    "enable_news": False,
     "tweet_on_force": True,
     "tweet_report_symbols": ["XRP", "BTC"],
     "news_pages_max": 6,
@@ -2444,15 +2445,18 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     if (is_forced or is_scheduled) and not surge_only:
-        print("\n[NEWS]")
-        try:
-            articles = fetch_news(coins_to_process)
-            print(f"✓ News: fetched {len(articles)} articles (after domain filter + dedup)")
-            post_news_to_discord(articles)
-        except Exception as e:
-            print(f"❌ News fetch/post failed → {e}")
-            import traceback
-            traceback.print_exc()
+        if bool(config.get("enable_news", False)):
+            print("\n[NEWS — OPTIONAL INTEGRATION]")
+            try:
+                articles = fetch_news(coins_to_process)
+                print(f"✓ News: fetched {len(articles)} articles (after domain filter + dedup)")
+                post_news_to_discord(articles)
+            except Exception as e:
+                print(f"❌ News fetch/post failed → {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("\n[NEWS] Disabled by config (enable_news=false); market report only.")
 
     try:
         with open(SURGE_STATE_FILE, "w") as f:

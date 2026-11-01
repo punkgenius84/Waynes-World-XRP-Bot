@@ -51,7 +51,7 @@ jobs:
       - name: Test key-level calculations
         run: python -m unittest discover -s tests -v
 
-      - name: Run XRP Empire Bot (full report)
+      - name: Run XRP Market Report Bot (full report)
         env:
           RUN_MODE:             report
           DISCORD_WEBHOOK_XRP:  ${{ secrets.DISCORD_WEBHOOK_XRP }}
