@@ -498,7 +498,8 @@ def fetch_data(coin: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame
         print(f"⚠️  {coin}: histohour failed → {e}")
 
     if df_new is None or df_new.empty:
-        print(f"⚠️  {coin}: CryptoCompare hourly empty — trying Coinbase")        cb = fetch_coinbase_hourly(coin, lookback_hours=1800, tsym="USD")
+        print(f"⚠️  {coin}: CryptoCompare hourly empty — trying Coinbase")
+        cb = fetch_coinbase_hourly(coin, lookback_hours=1800, tsym="USD")
         if cb is not None and not cb.empty:
             df_new = cb
 
@@ -997,6 +998,7 @@ def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]
         }
     except Exception:
         return empty
+
 
 def _range_location(price: float, high: Optional[float], low: Optional[float]) -> str:
     if high is None or low is None or high <= low:
@@ -1497,7 +1499,8 @@ def calculate_scalper_confidence(
     dist = float(bb.get("dist_pct", 50))
     if np.isfinite(dist) and dist > 100:
         score -= min(8, (dist - 100) * 0.20)
-    elif np.isfinite(dist) and 55 <= dist <= 80:        score += 2
+    elif np.isfinite(dist) and 55 <= dist <= 80:
+        score += 2
 
     biases = [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")]
     bullish_count = sum("BULLISH" in b for b in biases)
@@ -1520,6 +1523,7 @@ def calculate_scalper_confidence(
     conf = int(max(5, min(95, round(score))))
     qualifier = " — " + "; ".join(notes) if notes else ""
     return conf, qualifier
+
 
 def _ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False).mean()
@@ -1996,6 +2000,7 @@ def build_tweet_chart_image(
     if not _charts_available():
         print("ℹ️  Charts skipped (mplfinance/Pillow missing)")
         return None
+
     pathlib.Path("charts").mkdir(exist_ok=True)
 
     def tail(df: Optional[pd.DataFrame], n: int) -> Optional[pd.DataFrame]:
@@ -2018,6 +2023,7 @@ def build_tweet_chart_image(
         p4 = render_single_timeframe_chart(d_15,    f"{coin} — 15m",   os.path.join(td, "15m.png"))
         out_path = os.path.join("charts", f"{coin.lower()}_tweet.png")
         return stitch_2x2([p1, p2, p3, p4], out_path)
+
 
 def upload_media_and_tweet(coin: str, text: str, image_path: Optional[str]) -> bool:
     if not twitter_clients:
