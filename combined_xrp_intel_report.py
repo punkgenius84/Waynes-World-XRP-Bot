@@ -1158,7 +1158,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
 
-    return "\n".join(lines)
+    # Separate each timeframe into its own readable paragraph in the Discord embed.
+    return "\n\n".join(lines)
 
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
