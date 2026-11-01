@@ -5,7 +5,7 @@ import pandas as pd
 from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
     _structural_validation_lines, _uniq_levels, build_invalidation_status,
-    calculate_market_confidence, calculate_scalper_confidence,
+    calculate_market_confidence, calculate_scalper_confidence, scalper_outlook,
 )
 
 
@@ -251,6 +251,22 @@ class InvalidationHistoryTests(unittest.TestCase):
         )
         self.assertLess(partial, full)
         self.assertIn("data unavailable", note)
+
+
+    def test_mixed_scalper_labels_five_minute_bullish_as_countertrend_to_bearish_hourly(self):
+        result = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "NEUTRAL"}, {"bias": "BULLISH"},
+            45, {"dist_pct": 43.5}, 35,
+        )
+        self.assertEqual(result["headline"], "MIXED — SHORT-TERM")
+        self.assertEqual(result["five"], "Bullish — countertrend to 1H")
+
+    def test_mixed_scalper_labels_five_minute_bearish_as_countertrend_to_bullish_hourly(self):
+        result = scalper_outlook(
+            {"bias": "BULLISH"}, {"bias": "NEUTRAL"}, {"bias": "BEARISH"},
+            55, {"dist_pct": 43.5}, 35,
+        )
+        self.assertEqual(result["five"], "Bearish — countertrend to 1H")
 
     def test_mixed_higher_timeframe_structure_has_moderate_strength(self):
         score = calculate_market_confidence(
