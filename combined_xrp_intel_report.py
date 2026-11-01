@@ -977,6 +977,73 @@ def _structural_validation_lines(
     ]
 
 
+def _structure_direction(label: str) -> str:
+    if "Bullish" in (label or ""): return "BULLISH"
+    if "Bearish" in (label or ""): return "BEARISH"
+    if "Ranging" in (label or "") or "Choppy" in (label or ""): return "RANGE"
+    return "UNKNOWN"
+
+
+def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str]:
+    if df is None or df.empty or "close" not in df.columns: return None, "unavailable"
+    try:
+        close = float(df["close"].iloc[-1])
+        stamp = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d %H:%M UTC") if isinstance(df.index, pd.DatetimeIndex) else "time unavailable"
+        return close, stamp
+    except Exception:
+        return None, "unavailable"
+
+
+def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m,
+                              daily_struct, h4_struct, bias_1h, bias_15m, bias_5m) -> str:
+    """Persist confirmed structure transitions; keep EMA bias changes distinct."""
+    history = state_data.setdefault("invalidation_history", {})
+    lines = []
+    frames = [
+        ("Daily", df_daily, daily_struct, True),
+        ("4H", df_4h, h4_struct, True),
+        ("1H", hourly, bias_1h.get("bias", "No Data"), False),
+        ("15m", df_15m, bias_15m.get("bias", "No Data"), False),
+        ("5m", df_5m, bias_5m.get("bias", "No Data"), False),
+    ]
+    for name, frame, label, structural in frames:
+        close, stamp = _frame_close_stamp(frame)
+        direction = _structure_direction(label) if structural else _bias_kind(str(label))
+        previous = history.get(name, {})
+        if not isinstance(previous, dict): previous = {}
+        old = previous.get("direction", "UNKNOWN")
+        valid = ("BULLISH", "BEARISH", "RANGE") if structural else ("BULLISH", "BEARISH", "NEUTRAL")
+        changed = direction in valid and old not in ("UNKNOWN", direction)
+        # A move from RANGE into a trend is a breakout/transition, not an invalidation.
+        invalidated = old in ("BULLISH", "BEARISH") and direction != old
+        if changed and (not structural or invalidated):
+            previous["last_change"] = {"from": old, "to": direction, "at": stamp,
+                                       "close": close, "kind": "structure" if structural else "EMA bias"}
+        record = {"direction": direction, "last_change": previous.get("last_change")}
+        history[name] = record
+        if structural:
+            hi, lo = _last_swings(frame, name)
+            if direction == "BULLISH" and lo is not None:
+                boundary = f"active invalidation: 4H close below {_fmt_px(lo)}" if name == "Daily" else f"active invalidation: close below {_fmt_px(lo)}"
+            elif direction == "BEARISH" and hi is not None:
+                boundary = f"active invalidation: 4H close above {_fmt_px(hi)}" if name == "Daily" else f"active invalidation: close above {_fmt_px(hi)}"
+            elif direction == "RANGE" and hi is not None and lo is not None:
+                boundary = f"range break: close below {_fmt_px(lo)} / above {_fmt_px(hi)}"
+            else:
+                boundary = "active boundary unavailable (insufficient confirmed pivots)"
+            change = record["last_change"]
+            last = (f"last structure change: {change['from']} → {change['to']} at {change['at']} "
+                    f"(close {_fmt_px(change['close']) if change.get('close') else 'n/a'})"
+                    if change and change.get("kind") == "structure" else "last confirmed invalidation: none recorded")
+            lines.append(f"{name} {direction}: {last}; {boundary}")
+        else:
+            change = record["last_change"]
+            last = (f"last bias shift: {change['from']} → {change['to']} at {change['at']}"
+                    if change and change.get("kind") == "EMA bias" else "last bias shift: none recorded")
+            lines.append(f"{name} EMA bias {direction}: {last}; not a higher-TF structure invalidation")
+    return "\n".join(lines)
+
+
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
     if hourly is None or hourly.empty:
@@ -2093,6 +2160,10 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     )
     pos_out = position_outlook(daily_struct, h4_struct, rsi_4h, bb, position_confidence)
     scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
+    invalidation_text = build_invalidation_status(
+        state, df_daily, df_4h, hourly, df_15m if has_15m else None,
+        df_5m if has_5m else None, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+    )
     levels_text = build_levels_block(
         price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
     )
@@ -2127,6 +2198,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
+    embed.add_embed_field(name="🧭 Invalidation & Structure Status", value=invalidation_text[:1024], inline=False)
     embed.add_embed_field(name="📦 Volume Profile", value=vp_text[:1024], inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
