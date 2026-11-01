@@ -1028,18 +1028,22 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             elif direction == "BEARISH" and hi is not None:
                 boundary = f"active invalidation: 4H close above {_fmt_px(hi)}" if name == "Daily" else f"active invalidation: close above {_fmt_px(hi)}"
             elif direction == "RANGE" and hi is not None and lo is not None:
-                boundary = f"range break: close below {_fmt_px(lo)} / above {_fmt_px(hi)}"
+                boundary = (f"Daily swing-structure break: 4H close below {_fmt_px(lo)} / "
+                            f"above {_fmt_px(hi)}" if name == "Daily" else
+                            f"4H range break: close below {_fmt_px(lo)} / above {_fmt_px(hi)}")
             else:
                 boundary = "active boundary unavailable (insufficient confirmed pivots)"
             change = record["last_change"]
-            last = (f"last structure change: {change['from']} → {change['to']} at {change['at']} "
-                    f"(close {_fmt_px(change['close']) if change.get('close') else 'n/a'})"
-                    if change and change.get("kind") == "structure" else "last confirmed invalidation: none recorded")
+            if change and change.get("kind") == "structure":
+                last = (f"last structure invalidation: {change['from']} → {change['to']} at {change['at']} "
+                        f"(close {_fmt_px(change['close']) if change.get('close') else 'n/a'})")
+            else:
+                last = "history baseline: no prior structure transition captured yet"
             lines.append(f"{name} {direction}: {last}; {boundary}")
         else:
             change = record["last_change"]
-            last = (f"last bias shift: {change['from']} → {change['to']} at {change['at']}"
-                    if change and change.get("kind") == "EMA bias" else "last bias shift: none recorded")
+            last = (f"last EMA bias shift: {change['from']} → {change['to']} at {change['at']}"
+                    if change and change.get("kind") == "EMA bias" else "history baseline: no prior EMA bias shift captured yet")
             lines.append(f"{name} EMA bias {direction}: {last}; not a higher-TF structure invalidation")
     return "\n".join(lines)
 
