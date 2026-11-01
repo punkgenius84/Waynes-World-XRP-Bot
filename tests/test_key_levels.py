@@ -5,6 +5,7 @@ import pandas as pd
 from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
     _structural_validation_lines, _uniq_levels, build_invalidation_status,
+    calculate_market_confidence, calculate_scalper_confidence,
 )
 
 
@@ -219,6 +220,52 @@ class InvalidationHistoryTests(unittest.TestCase):
             state["invalidation_history"]["4H"]["last_invalidation"],
             previous_event,
         )
+
+    def test_scalper_confidence_rewards_bearish_alignment(self):
+        score, note = calculate_scalper_confidence(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            38, {"dist_pct": 43.5}, True, True,
+        )
+        self.assertEqual(score, 90)
+        self.assertEqual(note, "")
+
+    def test_scalper_confidence_is_direction_symmetric(self):
+        bullish, _ = calculate_scalper_confidence(
+            {"bias": "BULLISH"}, {"bias": "BULLISH"}, {"bias": "BULLISH"},
+            60, {"dist_pct": 43.5}, True, True,
+        )
+        bearish, _ = calculate_scalper_confidence(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            40, {"dist_pct": 43.5}, True, True,
+        )
+        self.assertEqual(bullish, bearish)
+
+    def test_scalper_confidence_penalizes_missing_lower_timeframe_data(self):
+        full, _ = calculate_scalper_confidence(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            38, {"dist_pct": 43.5}, True, True,
+        )
+        partial, note = calculate_scalper_confidence(
+            {"bias": "BEARISH"}, {"bias": "No Data"}, {"bias": "No Data"},
+            38, {"dist_pct": 43.5}, False, False,
+        )
+        self.assertLess(partial, full)
+        self.assertIn("data unavailable", note)
+
+    def test_mixed_higher_timeframe_structure_has_moderate_strength(self):
+        score = calculate_market_confidence(
+            {"dist_pct": 43.5}, 54, "Ranging/Choppy — Sideways", "Bearish (LH+LL) — Downtrend",
+        )
+        self.assertEqual(score, 58)
+
+    def test_market_confidence_rewards_aligned_structure_in_either_direction(self):
+        bullish = calculate_market_confidence(
+            {"dist_pct": 43.5}, 60, "Bullish (HH+HL)", "Bullish (HH+HL)",
+        )
+        bearish = calculate_market_confidence(
+            {"dist_pct": 43.5}, 40, "Bearish (LH+LL)", "Bearish (LH+LL)",
+        )
+        self.assertEqual(bullish, bearish)
 
 
 if __name__ == "__main__":
