@@ -92,6 +92,24 @@ class KeyLevelTests(unittest.TestCase):
         self.assertEqual(_last_swing_dates(None, "Daily"), (None, None))
 
 
+    def test_forming_four_hour_candle_cannot_confirm_invalidation(self):
+        frame = self._frame(close=1.21)
+        current_bucket = pd.Timestamp.now(tz="UTC").floor("4h")
+        frame.index = frame.index[:-1].append(pd.DatetimeIndex([current_bucket]))
+        frame.iloc[-2, frame.columns.get_loc("close")] = 1.21
+        frame.iloc[-1, frame.columns.get_loc("close")] = 1.19
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_checked_candle": "old",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertIsNone(state["invalidation_history"]["4H"]["last_invalidation"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
