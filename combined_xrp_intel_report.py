@@ -1608,46 +1608,30 @@ def volume_analysis(df: Optional[pd.DataFrame], lookback: int = 20) -> Dict[str,
 
 
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
-    score = 50.0
-
-    if "Bullish" in daily_struct:
-        score += 18
-    elif "Bearish" in daily_struct:
-        score -= 18
-
-    if "Bullish" in h4_struct:
-        score += 15
-    elif "Bearish" in h4_struct:
-        score -= 15
-
-    ranging_count = sum("Ranging/Choppy" in s for s in (daily_struct, h4_struct))
-    if ranging_count == 2:
-        score = min(score, 65.0)
-    elif ranging_count == 1:
-        score = min(score, 78.0)
-
-    if 52 <= rsi_val <= 68:
-        score += 4
-    elif 68 < rsi_val <= 75:
-        score += 1
-    elif rsi_val > 75:
-        score -= min(7, (rsi_val - 75) * 0.35)
-    elif 32 <= rsi_val < 48:
-        score -= 2
-    elif rsi_val < 32:
-        score += 2
-
-    dist = float(bb.get("dist_pct", 50))
-    if not np.isfinite(dist):
-        dist = 50.0
-    if dist > 100:
-        score -= min(8, (dist - 100) * 0.20)
-    elif 55 <= dist <= 80:
-        score += 2
-
-    if ranging_count == 2:
-        score = min(score, 65.0)
-
+    """Heuristic conviction in the higher-timeframe outlook, not a win probability."""
+    labels = (daily_struct or "", h4_struct or "")
+    bullish = sum("Bullish" in label for label in labels)
+    bearish = sum("Bearish" in label for label in labels)
+    ranging = sum("Ranging" in label or "Choppy" in label for label in labels)
+    if bullish == 2 or bearish == 2:
+        score, direction = 86.0, ("BULLISH" if bullish == 2 else "BEARISH")
+    elif (bullish == 1 or bearish == 1) and ranging == 1:
+        score, direction = 62.0, ("BULLISH" if bullish == 1 else "BEARISH")
+    elif bullish == 1 and bearish == 1:
+        score, direction = 35.0, "MIXED"
+    elif ranging == 2:
+        score, direction = 72.0, "RANGE"
+    else:
+        score, direction = 40.0, "UNKNOWN"
+    if direction == "BULLISH":
+        if 52 <= rsi_val <= 68: score += 4
+        elif rsi_val < 48 or rsi_val > 75: score -= 4
+    elif direction == "BEARISH":
+        if 32 <= rsi_val < 48: score += 4
+        elif rsi_val >= 52 or rsi_val < 25: score -= 4
+    dist = float((bb or {}).get("dist_pct", 50))
+    if not np.isfinite(dist): dist = 50.0
+    if dist > 100: score -= min(8, (dist - 100) * 0.20)
     return int(max(5, min(95, round(score))))
 
 
@@ -1656,52 +1640,42 @@ def calculate_scalper_confidence(
     rsi_15m: Optional[int], bb: dict,
     has_15m: bool, has_5m: bool,
 ) -> Tuple[int, str]:
-    score = 50.0
-    notes: List[str] = []
-
-    for bias, weight in zip(
-        [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")],
-        [20, 15, 10],
-    ):
-        if "BULLISH" in bias:
-            score += weight
-        elif "BEARISH" in bias:
-            score -= weight
-
+    """Score setup conviction independent of direction; this is not a win probability."""
+    kinds = [
+        _bias_kind((bias_1h or {}).get("bias", "")),
+        _bias_kind((bias_15m or {}).get("bias", "")),
+        _bias_kind((bias_5m or {}).get("bias", "")),
+    ]
+    bullish, bearish = kinds.count("BULLISH"), kinds.count("BEARISH")
+    neutral = kinds.count("NEUTRAL")
+    if bullish == 3 or bearish == 3:
+        score, direction = 85.0, ("BULLISH" if bullish == 3 else "BEARISH")
+    elif max(bullish, bearish) == 2:
+        direction = "BULLISH" if bullish == 2 else "BEARISH"
+        score = 68.0 if neutral == 1 else 58.0
+    elif bullish == 1 and bearish == 1:
+        score, direction = 35.0, "MIXED"
+    elif bullish == 1 or bearish == 1:
+        score, direction = 45.0, ("BULLISH" if bullish == 1 else "BEARISH")
+    else:
+        score, direction = 25.0, "NEUTRAL"
     if rsi_15m is not None:
-        if 50 <= rsi_15m <= 68:
-            score += 5
-        elif rsi_15m > 80:
-            score -= 12
-        elif rsi_15m > 70:
-            score -= 5
-        elif rsi_15m < 30:
-            score -= 4
-
-    dist = float(bb.get("dist_pct", 50))
-    if np.isfinite(dist) and dist > 100:
-        score -= min(8, (dist - 100) * 0.20)
-    elif np.isfinite(dist) and 55 <= dist <= 80:
-        score += 2
-
-    biases = [bias_1h.get("bias", ""), bias_15m.get("bias", ""), bias_5m.get("bias", "")]
-    bullish_count = sum("BULLISH" in b for b in biases)
-    if bullish_count < 3:
-        score = min(score, 82.0)
-    if bullish_count <= 1:
-        score = min(score, 68.0)
-
+        if direction == "BULLISH":
+            if 52 <= rsi_15m <= 68: score += 5
+            elif rsi_15m < 48 or rsi_15m > 75: score -= 5
+        elif direction == "BEARISH":
+            if 32 <= rsi_15m < 48: score += 5
+            elif rsi_15m >= 52 or rsi_15m < 25: score -= 5
+    dist = float((bb or {}).get("dist_pct", 50))
+    if not np.isfinite(dist): dist = 50.0
+    if dist > 100: score -= min(8, (dist - 100) * 0.20)
+    notes: List[str] = []
     if not has_15m:
         score -= 12
-        score = min(score, 45.0)
         notes.append("15m data unavailable")
     if not has_5m:
         score -= 8
-        score = min(score, 58.0)
         notes.append("5m data unavailable")
-    if not has_15m and not has_5m:
-        score = min(score, 35.0)
-
     conf = int(max(5, min(95, round(score))))
     qualifier = " — " + "; ".join(notes) if notes else ""
     return conf, qualifier
@@ -2314,12 +2288,12 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
     embed.add_embed_field(name="🧭 Invalidation & Structure Status", value=invalidation_text[:1024], inline=False)
-    embed.add_embed_field(name="📦 Volume Profile", value=vp_text[:1024], inline=False)
+    embed.add_embed_field(name="📦 Estimated Volume Profile", value=vp_text[:1024], inline=False)
     embed.add_embed_field(
         name="🎯 Position Outlook",
         value=(
             f"**{pos_out['headline']}**\n"
-            f"Confidence: {position_confidence}%\n"
+            f"Signal Strength: {position_confidence}/100\n"
             f"Trend: {pos_out['trend']}\n"
             f"Extension: {pos_out['extension']}"
         ),
@@ -2329,7 +2303,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="⚡ Scalper Outlook",
         value=(
             f"**{scalp_out['headline']}**\n"
-            f"Confidence: {scalper_confidence}%{scalp_note}\n"
+            f"Signal Strength: {scalper_confidence}/100{scalp_note}\n"
             f"{scalp_out['align']}\n"
             f"5m: {scalp_out['five']}\n"
             f"Extension: {scalp_out['extension']}"
@@ -2402,7 +2376,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print(f"🚀 CRYPTO INTEL BOT — {now_est.strftime('%I:%M %p %Z')}")
+    print(f"🚀 XRP MARKET REPORT BOT — {now_est.strftime('%I:%M %p %Z')}")
     print("=" * 60)
 
     github_event = os.getenv("GITHUB_EVENT_NAME", "")
@@ -2490,4 +2464,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️  Failed to save state: {e}")
 
-    print("✓ Run complete — Empire Status: ONLINE")
+    print("✓ Run complete — XRP Market Report Bot: ONLINE")
