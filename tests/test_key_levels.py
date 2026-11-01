@@ -198,5 +198,28 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertIsNone(state["invalidation_history"]["4H"]["last_invalidation"])
 
 
+    def test_same_broken_boundary_is_not_relogged_on_later_candles(self):
+        frame = self._frame(close=1.19)
+        previous_event = {
+            "from": "BULLISH", "to": "BEARISH", "boundary": 1.20,
+            "close": 1.18, "at": "2026-10-07 00:00 UTC",
+            "confirmation": "4H candle close",
+        }
+        state = {"invalidation_history": {"4H": {
+            "direction": "BULLISH", "active_boundary": 1.20,
+            "last_invalidation": previous_event,
+            "last_checked_candle": "older candle",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Bearish (LH+LL)", "Bearish (LH+LL)",
+            {"bias": "Bullish"}, {"bias": "Bullish"}, {"bias": "Bullish"},
+        )
+        self.assertEqual(
+            state["invalidation_history"]["4H"]["last_invalidation"],
+            previous_event,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
