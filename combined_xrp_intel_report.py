@@ -1043,13 +1043,19 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         # The boundary from the preceding run is the one being tested. Never
         # test a new pivot against the same candle that created/updated it.
         breached = False
-        breach_side = None
-        if not already_checked and old_direction == "BULLISH" and isinstance(old_boundary, (int, float)):
+        same_boundary_already_recorded = (
+            isinstance(last_event, dict)
+            and last_event.get("from") == old_direction
+            and isinstance(old_boundary, (int, float))
+            and isinstance(last_event.get("boundary"), (int, float))
+            and abs(float(last_event["boundary"]) - float(old_boundary)) < 1e-10
+        )
+        if (not already_checked and not same_boundary_already_recorded
+                and old_direction == "BULLISH" and isinstance(old_boundary, (int, float))):
             breached = close < float(old_boundary)
-            breach_side = "below" if breached else None
-        elif not already_checked and old_direction == "BEARISH" and isinstance(old_boundary, (int, float)):
+        elif (not already_checked and not same_boundary_already_recorded
+                and old_direction == "BEARISH" and isinstance(old_boundary, (int, float))):
             breached = close > float(old_boundary)
-            breach_side = "above" if breached else None
 
         if breached:
             last_event = {
