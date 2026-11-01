@@ -947,6 +947,36 @@ def _recent_daily_range(
         return None, None
 
 
+def _range_width_pct(high: float, low: float) -> float:
+    """Range width as a percentage of the range midpoint."""
+    if not np.isfinite(high) or not np.isfinite(low) or high <= low:
+        return 0.0
+    midpoint = (high + low) / 2.0
+    return ((high - low) / midpoint) * 100.0 if midpoint > 0 else 0.0
+
+
+def _structural_validation_lines(
+    daily_struct: str,
+    daily_high: Optional[float],
+    daily_low: Optional[float],
+) -> List[str]:
+    """Describe trend invalidation or range breaks using confirmed Daily pivots."""
+    if daily_high is None or daily_low is None or daily_high <= daily_low:
+        return []
+    if "Bullish" in (daily_struct or ""):
+        return [
+            f"Bullish Daily structure invalidated: 4H close below Daily swing low {_fmt_px(daily_low)}"
+        ]
+    if "Bearish" in (daily_struct or ""):
+        return [
+            f"Bearish Daily structure invalidated: 4H close above Daily swing high {_fmt_px(daily_high)}"
+        ]
+    return [
+        f"Daily range boundary: 4H close below {_fmt_px(daily_low)} breaks lower / "
+        f"above {_fmt_px(daily_high)} breaks higher"
+    ]
+
+
 def _weekly_levels(hourly: Optional[pd.DataFrame]) -> Dict[str, Optional[float]]:
     empty = {"week_high": None, "week_low": None, "prev_high": None, "prev_low": None, "prev_close": None}
     if hourly is None or hourly.empty:
@@ -1166,13 +1196,13 @@ def build_levels_block(
     range_hi, range_lo = _recent_daily_range(df_daily, lookback=20)
     if range_hi is not None and range_lo is not None:
         mid = (range_hi + range_lo) / 2.0
-        span_pct = ((range_hi - range_lo) / mid) * 100.0 if mid > 0 else 0.0
+        span_pct = _range_width_pct(range_hi, range_lo)
         lines.append(
             f"20D range {_fmt_px(range_lo)}–{_fmt_px(range_hi)} • mid {_fmt_px(mid)} "
-            f"• width {span_pct:.1f}% • {_range_location(price, range_hi, range_lo)}"
+            f"• width {span_pct:.1f}% of mid • {_range_location(price, range_hi, range_lo)}"
         )
     if h_hi is not None and h_lo is not None:
-        lines.append(f"4H swings {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
+        lines.append(f"4H confirmed swing pivots (low / high): {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
 
     d_hi_date, d_lo_date = _last_swing_dates(df_daily, "Daily")
     h_hi_date, h_lo_date = _last_swing_dates(df_4h, "4H")
@@ -1188,12 +1218,7 @@ def build_levels_block(
     if sup:
         lines.append(f"Loss of {_fmt_px(sup[0])} → short-term weakness increases")
 
-    if d_hi is not None and d_lo is not None:
-        lines.append(f"Invalidation: 4H close outside {_fmt_px(d_lo)}–{_fmt_px(d_hi)}")
-    elif "Bullish" in (daily_struct or "") and d_lo is not None:
-        lines.append(f"Invalidation: 4H close below Daily swing low {_fmt_px(d_lo)}")
-    elif "Bearish" in (daily_struct or "") and d_hi is not None:
-        lines.append(f"Invalidation: 4H close above Daily swing high {_fmt_px(d_hi)}")
+    lines.extend(_structural_validation_lines(daily_struct, d_hi, d_lo))
 
     ranging = ("Ranging" in (daily_struct or "") or "Choppy" in (daily_struct or "")) and (
         "Ranging" in (h4_struct or "") or "Choppy" in (h4_struct or "")
