@@ -1038,11 +1038,15 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         old_direction = prior.get("direction", "UNKNOWN")
         old_boundary = prior.get("active_boundary")
         last_event = prior.get("last_invalidation")
+        last_range_break = prior.get("last_range_break")
         last_change = prior.get("last_structure_change")
         already_checked = prior.get("last_checked_candle") == stamp
+        old_range_low = prior.get("active_range_low")
+        old_range_high = prior.get("active_range_high")
 
-        # The boundary from the preceding run is the one being tested. Never
-        # test a new pivot against the same candle that created/updated it.
+        # Test the preceding run's confirmed boundaries, never a pivot first
+        # discovered on this same candle. RANGE breaks are tracked separately
+        # from directional trend invalidations.
         breached = False
         same_boundary_already_recorded = (
             isinstance(last_event, dict)
@@ -1051,12 +1055,11 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             and isinstance(last_event.get("boundary"), (int, float))
             and abs(float(last_event["boundary"]) - float(old_boundary)) < 1e-10
         )
-        if (not already_checked and not same_boundary_already_recorded
-                and old_direction == "BULLISH" and isinstance(old_boundary, (int, float))):
-            breached = close < float(old_boundary)
-        elif (not already_checked and not same_boundary_already_recorded
-                and old_direction == "BEARISH" and isinstance(old_boundary, (int, float))):
-            breached = close > float(old_boundary)
+        if not already_checked and not same_boundary_already_recorded:
+            if old_direction == "BULLISH" and isinstance(old_boundary, (int, float)):
+                breached = close < float(old_boundary)
+            elif old_direction == "BEARISH" and isinstance(old_boundary, (int, float)):
+                breached = close > float(old_boundary)
 
         if breached:
             last_event = {
@@ -1072,6 +1075,23 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 "from": old_direction, "to": direction, "at": stamp,
                 "close": close, "note": "label transition; prior boundary not breached",
             }
+
+        range_break = None
+        if (name == "Daily" and old_direction == "RANGE" and direction == "RANGE"
+                and not already_checked and isinstance(old_range_low, (int, float))
+                and isinstance(old_range_high, (int, float))):
+            if close < float(old_range_low):
+                range_break = {
+                    "direction": "DOWNSIDE", "boundary": float(old_range_low),
+                    "close": close, "at": stamp, "confirmation": confirm_rule,
+                }
+            elif close > float(old_range_high):
+                range_break = {
+                    "direction": "UPSIDE", "boundary": float(old_range_high),
+                    "close": close, "at": stamp, "confirmation": confirm_rule,
+                }
+        if range_break is not None:
+            last_range_break = range_break
 
         if direction == "BULLISH":
             boundary_value = low
@@ -1097,13 +1117,20 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         else:
             stored_boundary = boundary_value
 
-        history[name] = {
+        history_entry = {
             "direction": direction,
             "active_boundary": stored_boundary,
             "last_invalidation": last_event,
             "last_structure_change": last_change,
             "last_checked_candle": stamp,
         }
+        if name == "Daily":
+            # Keep the prior confirmed range while testing each new completed
+            # 4H candle, then roll forward to the latest confirmed pivots.
+            history_entry["active_range_low"] = low if low is not None else old_range_low
+            history_entry["active_range_high"] = high if high is not None else old_range_high
+            history_entry["last_range_break"] = last_range_break
+        history[name] = history_entry
 
         if last_event:
             last_text = (
@@ -1116,6 +1143,16 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
             last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
                           f"at {last_change['at']} (boundary not breached)")
+        if name == "Daily" and direction == "RANGE":
+            if last_range_break:
+                range_text = (
+                    f"last confirmed range break: {last_range_break['direction']} "
+                    f"{last_range_break['at']} ({last_range_break['confirmation']} "
+                    f"{_fmt_px(last_range_break['boundary'])}; close {_fmt_px(last_range_break['close'])})"
+                )
+            else:
+                range_text = "last confirmed range break: none recorded"
+            return f"{name} {direction}: {range_text}; {boundary_text}"
         return f"{name} {direction}: {last_text}; {boundary_text}"
 
     lines = [
