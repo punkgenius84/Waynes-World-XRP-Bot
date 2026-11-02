@@ -203,6 +203,24 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(event["boundary"], 1.60)
         self.assertEqual(event["close"], 1.61)
 
+    def test_daily_range_same_broken_boundary_is_not_relogged(self):
+        previous = {
+            "direction": "DOWNSIDE", "boundary": 1.20, "close": 1.19,
+            "at": "2026-10-07 00:00 UTC", "confirmation": "4H candle close",
+        }
+        frame = self._frame(close=1.18)
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_range_break": previous, "last_checked_candle": "older candle",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        self.assertEqual(state["invalidation_history"]["Daily"]["last_range_break"], previous)
+
     def test_daily_range_wick_breach_does_not_record_break_when_close_holds(self):
         frame = self._frame(close=1.21)
         frame.iloc[-1, frame.columns.get_loc("low")] = 1.10
