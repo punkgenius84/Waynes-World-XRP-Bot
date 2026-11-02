@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-02 12:00 UTC",
+      "last_checked_candle": "2026-11-02 16:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": null
@@ -517,37 +517,37 @@
       "active_boundary": 1.3431,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-02 12:00 UTC"
-    },
-    "1H": {
-      "direction": "BEARISH",
-      "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-02 16:00 UTC",
-        "close": 1.249
-      },
       "last_checked_candle": "2026-11-02 16:00 UTC"
     },
-    "15m": {
-      "direction": "BEARISH",
+    "1H": {
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-02 17:30 UTC",
-        "close": 1.241
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-02 20:00 UTC",
+        "close": 1.244
       },
-      "last_checked_candle": "2026-11-02 17:30 UTC"
+      "last_checked_candle": "2026-11-02 20:00 UTC"
+    },
+    "15m": {
+      "direction": "BULLISH",
+      "last_bias_shift": {
+        "from": "BEARISH",
+        "to": "BULLISH",
+        "at": "2026-11-02 21:15 UTC",
+        "close": 1.246
+      },
+      "last_checked_candle": "2026-11-02 21:15 UTC"
     },
     "5m": {
-      "direction": "BEARISH",
+      "direction": "BULLISH",
       "last_bias_shift": {
-        "from": "BULLISH",
-        "to": "BEARISH",
-        "at": "2026-11-02 17:50 UTC",
-        "close": 1.236
+        "from": "BEARISH",
+        "to": "BULLISH",
+        "at": "2026-11-02 21:25 UTC",
+        "close": 1.246
       },
-      "last_checked_candle": "2026-11-02 17:50 UTC"
+      "last_checked_candle": "2026-11-02 21:25 UTC"
     }
   }
 }
