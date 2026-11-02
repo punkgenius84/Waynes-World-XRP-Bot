@@ -167,6 +167,92 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertIn("\n\n15m ", text)
         self.assertIn("\n\n5m ", text)
 
+    def test_daily_range_downside_break_is_recorded_on_completed_4h_close(self):
+        frame = self._frame(close=1.19)
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_checked_candle": "old",
+        }}}
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        event = state["invalidation_history"]["Daily"]["last_range_break"]
+        self.assertEqual(event["direction"], "DOWNSIDE")
+        self.assertEqual(event["boundary"], 1.20)
+        self.assertEqual(event["close"], 1.19)
+        self.assertIn("last confirmed range break: DOWNSIDE", text)
+        self.assertIsNone(state["invalidation_history"]["Daily"]["last_invalidation"])
+
+    def test_daily_range_upside_break_is_recorded_on_completed_4h_close(self):
+        frame = self._frame(close=1.61)
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_checked_candle": "old",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        event = state["invalidation_history"]["Daily"]["last_range_break"]
+        self.assertEqual(event["direction"], "UPSIDE")
+        self.assertEqual(event["boundary"], 1.60)
+        self.assertEqual(event["close"], 1.61)
+
+    def test_daily_range_same_broken_boundary_is_not_relogged(self):
+        previous = {
+            "direction": "DOWNSIDE", "boundary": 1.20, "close": 1.19,
+            "at": "2026-10-07 00:00 UTC", "confirmation": "4H candle close",
+        }
+        frame = self._frame(close=1.18)
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_range_break": previous, "last_checked_candle": "older candle",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        self.assertEqual(state["invalidation_history"]["Daily"]["last_range_break"], previous)
+
+    def test_daily_range_wick_breach_does_not_record_break_when_close_holds(self):
+        frame = self._frame(close=1.21)
+        frame.iloc[-1, frame.columns.get_loc("low")] = 1.10
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_checked_candle": "old",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        self.assertIsNone(state["invalidation_history"]["Daily"]["last_range_break"])
+
+    def test_daily_range_break_is_not_confirmed_by_forming_4h_candle(self):
+        frame = self._frame(close=1.21)
+        current_bucket = pd.Timestamp.now(tz="UTC").floor("4h")
+        frame.index = frame.index[:-1].append(pd.DatetimeIndex([current_bucket]))
+        frame.iloc[-1, frame.columns.get_loc("close")] = 1.19
+        state = {"invalidation_history": {"Daily": {
+            "direction": "RANGE", "active_boundary": None,
+            "active_range_low": 1.20, "active_range_high": 1.60,
+            "last_checked_candle": "old",
+        }}}
+        build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Bearish (LH+LL)",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+        )
+        self.assertIsNone(state["invalidation_history"]["Daily"]["last_range_break"])
+
     def test_ema_shift_is_recorded_separately_from_structure(self):
         state = {"invalidation_history": {"1H": {
             "direction": "BEARISH", "last_checked_candle": "old",
