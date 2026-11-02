@@ -1077,8 +1077,22 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             }
 
         range_break = None
+        same_range_break_already_recorded = (
+            isinstance(last_range_break, dict)
+            and isinstance(last_range_break.get("boundary"), (int, float))
+            and isinstance(old_range_low, (int, float))
+            and isinstance(old_range_high, (int, float))
+            and (
+                (last_range_break.get("direction") == "DOWNSIDE"
+                 and abs(float(last_range_break["boundary"]) - float(old_range_low)) < 1e-10)
+                or
+                (last_range_break.get("direction") == "UPSIDE"
+                 and abs(float(last_range_break["boundary"]) - float(old_range_high)) < 1e-10)
+            )
+        )
         if (name == "Daily" and old_direction == "RANGE" and direction == "RANGE"
-                and not already_checked and isinstance(old_range_low, (int, float))
+                and not already_checked and not same_range_break_already_recorded
+                and isinstance(old_range_low, (int, float))
                 and isinstance(old_range_high, (int, float))):
             if close < float(old_range_low):
                 range_break = {
