@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-05 12:00 UTC",
+      "last_checked_candle": "2026-11-05 16:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -529,7 +529,7 @@
         "close": 1.308,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-05 12:00 UTC"
+      "last_checked_candle": "2026-11-05 16:00 UTC"
     },
     "1H": {
       "direction": "BEARISH",
@@ -539,27 +539,27 @@
         "at": "2026-11-05 15:00 UTC",
         "close": 1.2438
       },
-      "last_checked_candle": "2026-11-05 18:00 UTC"
+      "last_checked_candle": "2026-11-05 20:00 UTC"
     },
     "15m": {
-      "direction": "NEUTRAL",
+      "direction": "BEARISH",
       "last_bias_shift": {
-        "from": "BEARISH",
-        "to": "NEUTRAL",
-        "at": "2026-11-05 19:15 UTC",
-        "close": 1.2317
+        "from": "NEUTRAL",
+        "to": "BEARISH",
+        "at": "2026-11-05 21:30 UTC",
+        "close": 1.2233
       },
-      "last_checked_candle": "2026-11-05 19:15 UTC"
+      "last_checked_candle": "2026-11-05 21:30 UTC"
     },
     "5m": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "last_bias_shift": {
-        "from": "BEARISH",
-        "to": "BULLISH",
-        "at": "2026-11-05 19:35 UTC",
-        "close": 1.2371
+        "from": "BULLISH",
+        "to": "BEARISH",
+        "at": "2026-11-05 21:45 UTC",
+        "close": 1.2228
       },
-      "last_checked_candle": "2026-11-05 19:35 UTC"
+      "last_checked_candle": "2026-11-05 21:45 UTC"
     }
   }
 }
