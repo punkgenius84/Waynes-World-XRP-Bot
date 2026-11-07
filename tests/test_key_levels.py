@@ -188,7 +188,7 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertIsNone(state["invalidation_history"]["Daily"]["last_invalidation"])
 
     def test_four_hour_range_downside_break_is_recorded_on_completed_4h_close(self):
-        frame = InvalidationHistoryTests._frame(close=1.09)
+        frame = self._frame(close=1.09)
         state = {"invalidation_history": {"4H": {
             "direction": "RANGE", "active_boundary": None,
             "last_checked_candle": "old",
@@ -463,7 +463,7 @@ class CandleIntegrityTests(unittest.TestCase):
         self.assertEqual(result["basis"], "last completed candle")
 
     def test_unverified_4h_data_does_not_update_daily_or_4h_break_history(self):
-        frame = self._frame(close=1.09)
+        frame = InvalidationHistoryTests._frame(close=1.09)
         state = {"invalidation_history": {
             "Daily": {"direction": "RANGE", "active_range_low": 1.20,
                       "active_range_high": 1.60, "last_checked_candle": "old"},
