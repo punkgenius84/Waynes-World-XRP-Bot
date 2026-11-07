@@ -1220,7 +1220,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 elif close > float(range_high):
                     range_break = {
                         "direction": "UPSIDE", "boundary": float(range_high),
-                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                        "close": close, "at": stamp, "timestamp_basis": "close",
+                        "confirmation": confirm_rule,
                     }
         if range_break is not None:
             last_range_break = range_break
