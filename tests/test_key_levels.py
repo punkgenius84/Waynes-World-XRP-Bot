@@ -3,7 +3,8 @@ import unittest
 import pandas as pd
 
 from combined_xrp_intel_report import (
-    _format_candle_confirmation, _range_floor_watch_line, _last_swing_dates, _range_width_pct, _recent_daily_range,
+    _format_candle_confirmation, _format_swing_pair, _range_floor_watch_line,
+    _last_swing_dates, _range_width_pct, _recent_daily_range,
     _structural_validation_lines, _uniq_levels,
     build_invalidation_status, calculate_market_confidence, calculate_scalper_confidence,
     scalper_outlook, position_outlook, validate_4h_candle_integrity, volume_analysis,
