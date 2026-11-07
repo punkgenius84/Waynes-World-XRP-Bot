@@ -363,7 +363,8 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertIn("high is inconsistent", reason)
 
     def test_missing_4h_bucket_is_held_for_data_integrity_review(self):
-        frame = self._frame(close=1.29).drop(index=pd.Timestamp("2026-10-08 00:00:00+00:00"))
+        frame = self._frame(close=1.29)
+        frame = frame.drop(index=frame.index[-2])
         valid, reason = _validate_confirming_candle(frame)
         self.assertFalse(valid)
         self.assertIn("candle gap detected", reason)
