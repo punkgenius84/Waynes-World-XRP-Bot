@@ -2474,10 +2474,6 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     scalper_confidence, scalp_note = calculate_scalper_confidence(
         bias_1h, bias_15m, bias_5m, rsi_15m, bb, has_15m, has_5m,
     )
-    pos_out = position_outlook(
-        daily_struct, h4_struct, rsi_4h, bb, position_confidence,
-        price=price, invalidation_history=state.get("invalidation_history", {}),
-    )
     scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
     data_integrity = validate_4h_candle_integrity(
         hourly, df_4h, volume_ratio=vol_4h.get("ratio") if vol_4h.get("label") != "No Data" else None,
@@ -2486,6 +2482,12 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         state, df_daily, df_4h, hourly, df_15m if has_15m else None,
         df_5m if has_5m else None, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
         data_integrity=data_integrity,
+    )
+    # Build Position Outlook after invalidation tracking so a newly confirmed
+    # break appears in this report rather than waiting for the next run.
+    pos_out = position_outlook(
+        daily_struct, h4_struct, rsi_4h, bb, position_confidence,
+        price=price, invalidation_history=state.get("invalidation_history", {}),
     )
     levels_text = build_levels_block(
         price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
