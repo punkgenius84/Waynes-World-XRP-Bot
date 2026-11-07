@@ -1632,18 +1632,22 @@ def build_levels_block(
             if isinstance(event, dict) and event.get("direction") == "DOWNSIDE":
                 boundary = event.get("boundary")
                 if isinstance(boundary, (int, float)) and price < float(boundary):
-                    broken_supports.append((float(boundary), timeframe, event.get("at", "")))
+                    broken_supports.append((
+                        float(boundary), timeframe, event.get("at", ""),
+                        event.get("timestamp_basis") == "close",
+                    ))
     if broken_supports:
         unique = []
         seen = set()
-        for level, timeframe, stamp in sorted(broken_supports, key=lambda item: item[0], reverse=True):
+        for level, timeframe, stamp, timestamp_is_close in sorted(
+            broken_supports, key=lambda item: item[0], reverse=True
+        ):
             key = round(level, 10)
             if key in seen:
                 continue
             seen.add(key)
-            timestamp_basis = event.get("timestamp_basis") == "close"
             confirmation_time = _format_candle_confirmation(
-                str(stamp), 240, timestamp_is_close=timestamp_basis,
+                str(stamp), 240, timestamp_is_close=timestamp_is_close,
             )
             unique.append(f"{_fmt_px(level)} ({timeframe}, {confirmation_time})")
         lines.append("Potential resistance — confirmed broken swing support: " + " / ".join(unique))
