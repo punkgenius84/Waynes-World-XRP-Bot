@@ -462,6 +462,25 @@ class CandleIntegrityTests(unittest.TestCase):
         self.assertEqual(result["last"], 10.0)
         self.assertEqual(result["basis"], "last completed candle")
 
+    def test_unverified_4h_data_does_not_update_daily_or_4h_break_history(self):
+        frame = self._frame(close=1.09)
+        state = {"invalidation_history": {
+            "Daily": {"direction": "RANGE", "active_range_low": 1.20,
+                      "active_range_high": 1.60, "last_checked_candle": "old"},
+            "4H": {"direction": "RANGE", "active_range_low": 1.10,
+                   "active_range_high": 1.60, "last_checked_candle": "old"},
+        }}
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Ranging/Choppy — Sideways",
+            {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"}, {"bias": "NEUTRAL"},
+            data_integrity={"status": "UNVERIFIED", "note": "hourly source mismatch"},
+        )
+        self.assertNotIn("last_range_break", state["invalidation_history"]["Daily"])
+        self.assertNotIn("last_range_break", state["invalidation_history"]["4H"])
+        self.assertEqual(state["invalidation_history"]["Daily"]["last_checked_candle"], "old")
+        self.assertIn("candle integrity UNVERIFIED", text)
+
     def test_neutral_position_outlook_labels_active_break_and_extension(self):
         history = {
             "Daily": {"last_range_break": {"direction": "DOWNSIDE", "boundary": 1.24}},
