@@ -1002,10 +1002,16 @@ def _frame_close_stamp(
         return None, "unavailable"
 
 
-def _format_candle_confirmation(close_stamp: str, interval_minutes: int) -> str:
-    """Label both candle-open and completed-close times to avoid timestamp ambiguity."""
+def _format_candle_confirmation(
+    stamp: str, interval_minutes: int, timestamp_is_close: bool = True,
+) -> str:
+    """Label candle-open and confirmation-close times, including legacy open-time records."""
     try:
-        close_time = pd.to_datetime(close_stamp, utc=True)
+        recorded_time = pd.to_datetime(stamp, utc=True)
+        close_time = (
+            recorded_time if timestamp_is_close
+            else recorded_time + pd.Timedelta(minutes=interval_minutes)
+        )
         open_time = close_time - pd.Timedelta(minutes=interval_minutes)
         return (
             f"confirmation close {close_time.strftime('%Y-%m-%d %H:%M UTC')} "
@@ -1172,11 +1178,13 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 "boundary": float(old_boundary),
                 "close": close,
                 "at": stamp,
+                "timestamp_basis": "close",
                 "confirmation": confirm_rule,
             }
         elif old_direction not in ("UNKNOWN", direction) and not already_checked:
             last_change = {
                 "from": old_direction, "to": direction, "at": stamp,
+                "timestamp_basis": "close",
                 "close": close, "note": "label transition; prior boundary not breached",
             }
 
@@ -1207,7 +1215,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 if close < float(range_low):
                     range_break = {
                         "direction": "DOWNSIDE", "boundary": float(range_low),
-                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                        "close": close, "at": stamp, "timestamp_basis": "close", "confirmation": confirm_rule,
                     }
                 elif close > float(range_high):
                     range_break = {
@@ -1260,7 +1268,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             last_text = (
                 f"last confirmed invalidation: {last_event['from']} boundary "
                 f"{_fmt_px(last_event['boundary'])} broken {last_event['confirmation']} "
-                f"{_format_candle_confirmation(last_event['at'], 240)} "
+                f"{_format_candle_confirmation(last_event['at'], 240, last_event.get('timestamp_basis') == 'close')} "
                 f"(close {_fmt_px(last_event['close'])})"
             )
         else:
@@ -1268,13 +1276,13 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
             last_text += (
                 f"; last label transition: {last_change['from']} → {last_change['to']} "
-                f"{_format_candle_confirmation(last_change['at'], 240)} (boundary not breached)"
+                f"{_format_candle_confirmation(last_change['at'], 240, last_change.get('timestamp_basis') == 'close')} (boundary not breached)"
             )
         if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
                     f"last close-confirmed swing-range break: {last_range_break['direction']} "
-                    f"{_format_candle_confirmation(last_range_break['at'], 240)} "
+                    f"{_format_candle_confirmation(last_range_break['at'], 240, last_range_break.get('timestamp_basis') == 'close')} "
                     f"({last_range_break['confirmation']} {_fmt_px(last_range_break['boundary'])}; "
                     f"close {_fmt_px(last_range_break['close'])})"
                 )
@@ -1323,7 +1331,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         old = prior.get("direction", "UNKNOWN")
         last_shift = prior.get("last_bias_shift")
         if old not in ("UNKNOWN", direction) and prior.get("last_checked_candle") != stamp:
-            last_shift = {"from": old, "to": direction, "at": stamp, "close": close}
+            last_shift = {"from": old, "to": direction, "at": stamp, "timestamp_basis": "close", "close": close}
         history[name] = {
             "direction": direction,
             "last_bias_shift": last_shift,
@@ -1331,7 +1339,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         }
         last_text = (
             f"last bias shift: {last_shift['from']} → {last_shift['to']} "
-            f"{_format_candle_confirmation(last_shift['at'], interval_minutes)}"
+            f"{_format_candle_confirmation(last_shift['at'], interval_minutes, last_shift.get('timestamp_basis') == 'close')}"
             if last_shift else "last bias shift: none recorded"
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
