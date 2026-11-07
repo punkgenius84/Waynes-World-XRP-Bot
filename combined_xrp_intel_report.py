@@ -995,8 +995,86 @@ def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str
         return None, "unavailable"
 
 
+
+def validate_4h_candle_integrity(
+    hourly: Optional[pd.DataFrame],
+    df_4h: Optional[pd.DataFrame],
+    max_move_pct: float = 4.0,
+    volume_ratio: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Validate the latest completed 4H bar against its four 1H source bars."""
+    result: Dict[str, Any] = {
+        "status": "NO DATA",
+        "note": "4H candle integrity unavailable (insufficient hourly history)",
+        "move_pct": None,
+    }
+    required = {"open", "high", "low", "close", "volume"}
+    if (hourly is None or hourly.empty or df_4h is None or df_4h.empty
+            or not required.issubset(hourly.columns)
+            or not required.issubset(df_4h.columns)
+            or not isinstance(hourly.index, pd.DatetimeIndex)
+            or not isinstance(df_4h.index, pd.DatetimeIndex)):
+        return result
+    try:
+        hourly = hourly.copy()
+        hourly.index = pd.to_datetime(hourly.index, utc=True)
+        four_hour = df_4h.copy()
+        four_hour.index = pd.to_datetime(four_hour.index, utc=True)
+        now = pd.Timestamp.now(tz="UTC")
+        completed = four_hour.loc[four_hour.index + pd.Timedelta(hours=4) <= now]
+        if len(completed) < 2:
+            return result
+        stamp = completed.index[-1]
+        candle = completed.iloc[-1]
+        previous = completed.iloc[-2]
+        source = hourly.loc[(hourly.index >= stamp) & (hourly.index < stamp + pd.Timedelta(hours=4))]
+        expected = pd.date_range(stamp, periods=4, freq="1h")
+        if len(source) != 4 or not source.index.equals(expected):
+            result.update(status="UNVERIFIED", note=f"4H source coverage incomplete ({len(source)}/4 hourly candles); verify feed before relying on the break")
+            return result
+        values = source[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+        if (not np.isfinite(values.to_numpy()).all()
+                or (values[["open", "high", "low", "close"]] <= 0).any().any()
+                or (values["volume"] < 0).any()
+                or (values["high"] < values[["open", "close", "low"]].max(axis=1)).any()
+                or (values["low"] > values[["open", "close", "high"]].min(axis=1)).any()):
+            result.update(status="UNVERIFIED", note="4H source candles contain invalid OHLCV values; verify feed before relying on the break")
+            return result
+        aggregate = {
+            "open": float(values["open"].iloc[0]),
+            "high": float(values["high"].max()),
+            "low": float(values["low"].min()),
+            "close": float(values["close"].iloc[-1]),
+            "volume": float(values["volume"].sum()),
+        }
+        for field, expected_value in aggregate.items():
+            actual = float(candle[field])
+            tolerance = max(1e-8, abs(expected_value) * 1e-5)
+            if not np.isfinite(actual) or abs(actual - expected_value) > tolerance:
+                result.update(status="UNVERIFIED", note=f"4H {field} does not match its four 1H source candles; verify feed before relying on the break")
+                return result
+        prior_close, current_close = float(previous["close"]), float(candle["close"])
+        if prior_close <= 0 or current_close <= 0:
+            result.update(status="UNVERIFIED", note="4H close is invalid; verify feed before relying on the break")
+            return result
+        move_pct = (current_close - prior_close) / prior_close * 100.0
+        result["move_pct"] = round(move_pct, 2)
+        if abs(move_pct) >= float(max_move_pct):
+            low_volume_note = (
+                f"; reported 4H volume is only {volume_ratio:.2f}x average"
+                if volume_ratio is not None and np.isfinite(volume_ratio) and volume_ratio < 0.25
+                else ""
+            )
+            result.update(status="FLAG", note=f"unusually large 4H close-to-close move ({move_pct:+.2f}%){low_volume_note}; check source data before treating the break as fully verified")
+        else:
+            result.update(status="OK", note=f"4H OHLCV matches four hourly candles; close-to-close move {move_pct:+.2f}%")
+        return result
+    except Exception as exc:
+        return {"status": "UNVERIFIED", "note": f"4H integrity check failed ({type(exc).__name__}); verify feed before relying on the break", "move_pct": None}
+
 def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m,
-                              daily_struct, h4_struct, bias_1h, bias_15m, bias_5m) -> str:
+                              daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+                              data_integrity: Optional[Dict[str, Any]] = None) -> str:
     """Track confirmed boundary breaks and EMA shifts without promoting missing data."""
     history = state_data.setdefault("invalidation_history", {})
     if not isinstance(history, dict):
@@ -1187,6 +1265,10 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         update_structure("Daily", df_daily, df_4h, daily_struct, "4H candle close"),
         update_structure("4H", df_4h, df_4h, h4_struct, "4H candle close"),
     ]
+    integrity = data_integrity if isinstance(data_integrity, dict) else {}
+    integrity_status = str(integrity.get("status", "NO DATA")).upper()
+    if integrity_status in ("FLAG", "UNVERIFIED"):
+        lines[1] += f"; candle integrity {integrity_status}: {integrity.get('note', 'verification required')}"
 
     for name, frame, bias in (
         ("1H", hourly, bias_1h),
@@ -1891,7 +1973,9 @@ def position_outlook(
             if still_broken:
                 active_breaks.append(f"{timeframe} {event['direction'].lower()} break")
         if active_breaks:
-            headline = "NEUTRAL — " + " / ".join(active_breaks) + " active"
+            headline = "NEUTRAL BIAS — ACTIVE " + " / ".join(active_breaks).upper()
+        if ext in ("High", "Elevated"):
+            headline += " — EXTENDED"
     elif bull_count == 1 or bear_count == 1:
         headline, trend, stance = "MIXED — Partial Higher-TF Trend", "Partially confirmed", "MIXED"
     else:
@@ -2389,9 +2473,13 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         price=price, invalidation_history=state.get("invalidation_history", {}),
     )
     scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
+    data_integrity = validate_4h_candle_integrity(
+        hourly, df_4h, volume_ratio=vol_4h.get("ratio") if vol_4h.get("label") != "No Data" else None,
+    )
     invalidation_text = build_invalidation_status(
         state, df_daily, df_4h, hourly, df_15m if has_15m else None,
         df_5m if has_5m else None, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+        data_integrity=data_integrity,
     )
     levels_text = build_levels_block(
         price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
