@@ -1080,8 +1080,14 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
     if not isinstance(history, dict):
         history = {}
         state_data["invalidation_history"] = history
+    integrity = data_integrity if isinstance(data_integrity, dict) else {}
+    integrity_status = str(integrity.get("status", "NO DATA")).upper()
 
     def close_and_stamp(frame, interval_minutes):
+        # Do not promote a Daily/4H break from a candle whose source data
+        # failed validation. Preserve the previous structural event instead.
+        if interval_minutes == 240 and integrity_status == "UNVERIFIED":
+            return None, None
         # Exchange candle timestamps mark candle opens. Exclude the currently
         # forming candle so only a completed close can confirm a boundary break.
         if frame is None or frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
@@ -1265,10 +1271,10 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         update_structure("Daily", df_daily, df_4h, daily_struct, "4H candle close"),
         update_structure("4H", df_4h, df_4h, h4_struct, "4H candle close"),
     ]
-    integrity = data_integrity if isinstance(data_integrity, dict) else {}
-    integrity_status = str(integrity.get("status", "NO DATA")).upper()
     if integrity_status in ("FLAG", "UNVERIFIED"):
-        lines[1] += f"; candle integrity {integrity_status}: {integrity.get('note', 'verification required')}"
+        note = integrity.get("note", "verification required")
+        lines[0] += f"; 4H source integrity {integrity_status}: {note}"
+        lines[1] += f"; candle integrity {integrity_status}: {note}"
 
     for name, frame, bias in (
         ("1H", hourly, bias_1h),
