@@ -94,6 +94,7 @@ CRYPTOCOMPARE_PRICE      = "https://min-api.cryptocompare.com/data/price"
 NEWS_ENDPOINT             = "https://min-api.cryptocompare.com/data/v2/news/"
 
 LIVE_VS_HOURLY_MAX_DIVERGENCE = 0.04
+MAX_CONFIRMED_4H_CANDLE_MOVE_PCT = 4.0
 
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
 _COINBASE_GRANULARITY_SEC = {1: 60, 5: 300, 15: 900, 60: 3600, 360: 21600, 1440: 86400}
@@ -995,6 +996,51 @@ def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str
         return None, "unavailable"
 
 
+def _validate_confirming_candle(
+    frame: Optional[pd.DataFrame],
+    interval_minutes: int = 240,
+    max_move_pct: float = MAX_CONFIRMED_4H_CANDLE_MOVE_PCT,
+) -> Tuple[bool, str]:
+    """Reject structural confirmation when the completed candle is internally inconsistent or anomalous."""
+    if frame is None or frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
+        return False, "confirmation data unavailable"
+    try:
+        data = frame.copy()
+        data.index = pd.to_datetime(data.index, utc=True)
+        now = pd.Timestamp.now(tz="UTC")
+        completed = data.loc[data.index + pd.to_timedelta(interval_minutes, unit="m") <= now]
+        if len(completed) < 2:
+            return False, "fewer than two completed candles available"
+        last, previous = completed.iloc[-1], completed.iloc[-2]
+        stamp = pd.Timestamp(completed.index[-1])
+        if interval_minutes == 240 and (stamp.minute != 0 or stamp.second != 0 or stamp.hour % 4 != 0):
+            return False, "4H candle timestamp is not aligned to a 4-hour UTC boundary"
+        elapsed = (stamp - pd.Timestamp(completed.index[-2])).total_seconds()
+        if elapsed != interval_minutes * 60:
+            return False, f"candle gap detected ({elapsed / 3600:.1f}h between bars)"
+        for label, row in (("previous", previous), ("latest", last)):
+            values = {key: float(row[key]) for key in ("open", "high", "low", "close")}
+            if not all(np.isfinite(value) and value > 0 for value in values.values()):
+                return False, f"{label} candle has missing, non-finite, or non-positive OHLC"
+            if values["high"] < max(values["open"], values["close"], values["low"]):
+                return False, f"{label} candle high is inconsistent with OHLC"
+            if values["low"] > min(values["open"], values["close"], values["high"]):
+                return False, f"{label} candle low is inconsistent with OHLC"
+            if "volume" in row and (not np.isfinite(float(row["volume"])) or float(row["volume"]) < 0):
+                return False, f"{label} candle volume is invalid"
+        previous_close = float(previous["close"])
+        latest_close = float(last["close"])
+        move_pct = abs((latest_close - previous_close) / previous_close) * 100.0
+        if move_pct > float(max_move_pct):
+            return False, (
+                f"4H close changed {move_pct:.2f}% from prior close "
+                f"(review threshold {float(max_move_pct):.1f}%)"
+            )
+        return True, "OHLC, timestamps, continuity, and close-to-close move validated"
+    except Exception as exc:
+        return False, f"candle validation error: {type(exc).__name__}"
+
+
 def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m,
                               daily_struct, h4_struct, bias_1h, bias_15m, bias_5m) -> str:
     """Track confirmed boundary breaks and EMA shifts without promoting missing data."""
@@ -1024,11 +1070,19 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
     def update_structure(name, pivot_frame, confirmation_frame, label, confirm_rule):
         direction = _structure_direction(label)
         close, stamp = close_and_stamp(confirmation_frame, 240)
+        valid_candle, validation_note = _validate_confirming_candle(confirmation_frame, 240)
         if direction == "UNKNOWN" or close is None:
             prior = history.get(name, {})
             prior = prior if isinstance(prior, dict) else {}
             history[name] = prior
             return f"{name}: status unavailable (insufficient confirmed data); previous history preserved"
+        if not valid_candle:
+            prior = history.get(name, {})
+            history[name] = prior if isinstance(prior, dict) else {}
+            return (
+                f"{name}: STRUCTURE CONFIRMATION HELD — data-integrity review required "
+                f"({validation_note}); previous history preserved"
+            )
 
         high, low = _last_swings(pivot_frame, name)
         prior = history.get(name, {})
@@ -1167,8 +1221,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             if last_range_break:
                 range_text = (
                     f"last confirmed swing-range break: {last_range_break['direction']} "
-                    f"{last_range_break['at']} ({last_range_break['confirmation']} "
-                    f"{_fmt_px(last_range_break['boundary'])}; close {_fmt_px(last_range_break['close'])})"
+                    f"{last_range_break['at']} (broken boundary {_fmt_px(last_range_break['boundary'])}; "
+                    f"confirming candle close {_fmt_px(last_range_break['close'])})"
                 )
                 if last_range_break["direction"] == "DOWNSIDE" and close < float(last_range_break["boundary"]):
                     range_text += "; price remains below broken boundary"
@@ -1178,8 +1232,19 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                     range_text += "; boundary has since been reclaimed"
             else:
                 range_text = "last confirmed swing-range break: none recorded"
-            pattern_note = " (pivot pattern remains non-trending)" if direction == "RANGE" else ""
-            return f"{name} {direction}{pattern_note}: {range_text}; {boundary_text}"
+            if direction == "RANGE" and last_range_break:
+                active = (
+                    last_range_break.get("direction") == "DOWNSIDE" and close < float(last_range_break["boundary"])
+                ) or (
+                    last_range_break.get("direction") == "UPSIDE" and close > float(last_range_break["boundary"])
+                )
+                pattern_note = (
+                    f" — pivot pattern remains non-trending; "
+                    f"{last_range_break['direction'].lower()} swing break {'active' if active else 'reclaimed'}"
+                )
+            else:
+                pattern_note = " — pivot pattern remains non-trending" if direction == "RANGE" else ""
+            return f"{name} RANGE{pattern_note}: {range_text}; {boundary_text}"
         return f"{name} {direction}: {last_text}; {boundary_text}"
 
     lines = [
@@ -1954,12 +2019,20 @@ def scalper_outlook(
         else:
             five = sig5 or "Neutral"
 
+    if ext == "High":
+        entry_quality = "LOW — highly extended; avoid chasing, wait for a reset/retest"
+    elif ext == "Elevated":
+        entry_quality = "CAUTIOUS — extended; wait for pullback/retest and defined risk"
+    else:
+        entry_quality = "CONDITIONAL — alignment is not an entry trigger; wait for a valid setup"
+
     return {
         "headline": headline,
         "align": align,
         "five": five,
         "extension": ext,
         "confidence": confidence,
+        "entry_quality": entry_quality,
     }
 
 
@@ -2409,7 +2482,14 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
             inline=True,
         )
     embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
-    embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
+    embed.add_embed_field(
+        name="📐 Structure",
+        value=(
+            f"Daily: {daily_struct} — see swing-break status below\n"
+            f"4H: {h4_struct} — see swing-break status below"
+        ),
+        inline=False,
+    )
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
     # Give every timeframe its own full-width Discord field so spacing is
     # preserved visually instead of relying on blank lines inside one field.
@@ -2435,8 +2515,9 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="⚡ Scalper Outlook",
         value=(
             f"**{scalp_out['headline']}**\n"
-            f"Setup Conviction (heuristic, not probability): {scalper_confidence}/100{scalp_note}\n"
+            f"Directional Alignment (heuristic, not probability): {scalper_confidence}/100{scalp_note}\n"
             f"{scalp_out['align']}\n"
+            f"Fresh-entry quality: {scalp_out['entry_quality']}\n"
             f"5m: {scalp_out['five']}\n"
             f"Extension: {scalp_out['extension']}"
         ),
