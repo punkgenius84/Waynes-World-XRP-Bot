@@ -1633,7 +1633,11 @@ def build_levels_block(
             if key in seen:
                 continue
             seen.add(key)
-            unique.append(f"{_fmt_px(level)} ({timeframe}, {stamp})")
+            timestamp_basis = event.get("timestamp_basis") == "close"
+            confirmation_time = _format_candle_confirmation(
+                str(stamp), 240, timestamp_is_close=timestamp_basis,
+            )
+            unique.append(f"{_fmt_px(level)} ({timeframe}, {confirmation_time})")
         lines.append("Potential resistance — confirmed broken swing support: " + " / ".join(unique))
 
     ranging = ("Ranging" in (daily_struct or "") or "Choppy" in (daily_struct or "")) and (
@@ -1643,11 +1647,17 @@ def build_levels_block(
     k15 = _bias_kind(bias_15m.get("bias", ""))
     k5 = _bias_kind(bias_5m.get("bias", ""))
     if ranging:
-        short = [f"{tf} {k.lower()}" for tf, k in (("1H", k1), ("15m", k15), ("5m", k5)) if k != "NEUTRAL"]
-        if short:
-            lines.append("Note: Daily/4H pivot pattern is choppy; short TF " + " / ".join(short) + ".")
-        else:
-            lines.append("Note: Daily/4H pivot pattern is choppy; no short-TF alignment.")
+        short = []
+        for timeframe, bias, kind in (
+            ("1H", bias_1h, k1), ("15m", bias_15m, k15), ("5m", bias_5m, k5),
+        ):
+            raw_bias = str((bias or {}).get("bias", "")).strip().upper()
+            status = "no data" if not raw_bias or "NO DATA" in raw_bias else kind.lower()
+            short.append(f"{timeframe} {status}")
+        lines.append(
+            "Note: Daily/4H pivot pattern is choppy; short TF "
+            + " / ".join(short) + "."
+        )
 
     return "\n".join(lines)
 

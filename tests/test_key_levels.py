@@ -1,11 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from combined_xrp_intel_report import (
     _format_candle_confirmation, _format_swing_pair, _range_floor_watch_line,
     _last_swing_dates, _range_width_pct, _recent_daily_range,
-    _structural_validation_lines, _uniq_levels,
+    _structural_validation_lines, _uniq_levels, build_levels_block,
     build_invalidation_status, calculate_market_confidence, calculate_scalper_confidence,
     scalper_outlook, position_outlook, validate_4h_candle_integrity, volume_analysis,
 )
@@ -48,6 +49,59 @@ class KeyLevelTests(unittest.TestCase):
             _format_candle_confirmation("2026-11-07 04:00 UTC", 240),
             "confirmation close 2026-11-07 04:00 UTC (candle opened 2026-11-07 00:00 UTC)",
         )
+
+    def test_broken_support_uses_confirmation_close_and_candle_open(self):
+        index = pd.date_range("2026-10-01", periods=45, freq="4h", tz="UTC")
+        frame_4h = pd.DataFrame({
+            "open": [1.30] * 45, "high": [1.40] * 45,
+            "low": [1.20] * 45, "close": [1.30] * 45,
+            "volume": [10.0] * 45,
+        }, index=index)
+        daily_index = pd.date_range("2026-09-01", periods=45, freq="D", tz="UTC")
+        frame_daily = pd.DataFrame({
+            "open": [1.30] * 45, "high": [1.50] * 45,
+            "low": [1.10] * 45, "close": [1.30] * 45,
+            "volume": [10.0] * 45,
+        }, index=daily_index)
+        history = {"invalidation_history": {
+            "Daily": {"last_range_break": {
+                "direction": "DOWNSIDE", "boundary": 1.2460,
+                "at": "2026-11-05 16:00 UTC", "timestamp_basis": "close",
+            }},
+            "4H": {"last_range_break": {
+                "direction": "DOWNSIDE", "boundary": 1.2333,
+                "at": "2026-11-07 04:00 UTC", "timestamp_basis": "close",
+            }},
+        }}
+        with patch("combined_xrp_intel_report.state", history):
+            result = build_levels_block(
+                1.1544, frame_daily, frame_4h, frame_4h,
+                "Ranging/Choppy — Sideways", "Ranging/Choppy — Sideways",
+                {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "NEUTRAL"},
+            )
+        self.assertIn(
+            "$1.2460 (Daily, confirmation close 2026-11-05 16:00 UTC "
+            "(candle opened 2026-11-05 12:00 UTC))", result,
+        )
+        self.assertIn(
+            "$1.2333 (4H, confirmation close 2026-11-07 04:00 UTC "
+            "(candle opened 2026-11-07 00:00 UTC))", result,
+        )
+        self.assertIn("short TF 1H bearish / 15m bearish / 5m neutral", result)
+
+    def test_short_timeframe_summary_marks_missing_data_explicitly(self):
+        index = pd.date_range("2026-10-01", periods=45, freq="4h", tz="UTC")
+        frame = pd.DataFrame({
+            "open": [1.30] * 45, "high": [1.40] * 45,
+            "low": [1.20] * 45, "close": [1.30] * 45,
+            "volume": [10.0] * 45,
+        }, index=index)
+        result = build_levels_block(
+            1.30, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Ranging/Choppy — Sideways",
+            {"bias": "BEARISH"}, {"bias": "No Data"}, {"bias": "NEUTRAL"},
+        )
+        self.assertIn("short TF 1H bearish / 15m no data / 5m neutral", result)
 
     def test_bullish_daily_structure_uses_lower_pivot_as_invalidation(self):
         self.assertEqual(
