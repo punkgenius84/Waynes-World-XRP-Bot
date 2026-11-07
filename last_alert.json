@@ -561,14 +561,14 @@
       "last_checked_candle": "2026-11-07 04:00 UTC"
     },
     "5m": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-07 04:10 UTC",
-        "close": 1.1516
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-07 04:20 UTC",
+        "close": 1.1569
       },
-      "last_checked_candle": "2026-11-07 04:10 UTC"
+      "last_checked_candle": "2026-11-07 04:20 UTC"
     }
   }
 }
