@@ -1013,12 +1013,14 @@ def _format_candle_confirmation(
             else recorded_time + pd.Timedelta(minutes=interval_minutes)
         )
         open_time = close_time - pd.Timedelta(minutes=interval_minutes)
+        close_local = close_time.tz_convert("America/New_York")
+        open_local = open_time.tz_convert("America/New_York")
         return (
-            f"confirmation close {close_time.strftime('%Y-%m-%d %H:%M UTC')} "
-            f"(candle opened {open_time.strftime('%Y-%m-%d %H:%M UTC')})"
+            f"confirmation close {close_local.strftime('%Y-%m-%d %H:%M %Z')} "
+            f"(candle opened {open_local.strftime('%Y-%m-%d %H:%M %Z')})"
         )
     except Exception:
-        return f"confirmation close {close_stamp}"
+        return f"confirmation close {stamp}"
 
 
 
@@ -1285,7 +1287,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                     f"last close-confirmed swing-range break: {last_range_break['direction']} "
                     f"{_format_candle_confirmation(last_range_break['at'], 240, last_range_break.get('timestamp_basis') == 'close')} "
                     f"({last_range_break['confirmation']} {_fmt_px(last_range_break['boundary'])}; "
-                    f"close {_fmt_px(last_range_break['close'])})"
+                    f"confirmation candle close {_fmt_px(last_range_break['close'])})"
                 )
                 if last_range_break["direction"] == "DOWNSIDE" and close < float(last_range_break["boundary"]):
                     range_text = "ACTIVE DOWNSIDE BREAK — " + range_text + "; price remains below broken boundary"
@@ -1340,8 +1342,14 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         }
         last_text = (
             f"last bias shift: {last_shift['from']} → {last_shift['to']} "
-            f"{_format_candle_confirmation(last_shift['at'], interval_minutes, last_shift.get('timestamp_basis') == 'close')}"
-            if last_shift else "last bias shift: none recorded"
+            f"{_format_candle_confirmation(last_shift['at'], interval_minutes, last_shift.get('timestamp_basis') == 'close')} "
+            f"(confirmation candle close {_fmt_px(last_shift['close'])})"
+            if last_shift and isinstance(last_shift.get("close"), (int, float))
+            else (
+                f"last bias shift: {last_shift['from']} → {last_shift['to']} "
+                f"{_format_candle_confirmation(last_shift['at'], interval_minutes, last_shift.get('timestamp_basis') == 'close')}"
+                if last_shift else "last bias shift: none recorded"
+            )
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
 
