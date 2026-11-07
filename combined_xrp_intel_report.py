@@ -1078,7 +1078,12 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             return f"{name}: status unavailable (insufficient confirmed data); previous history preserved"
         if not valid_candle:
             prior = history.get(name, {})
-            history[name] = prior if isinstance(prior, dict) else {}
+            prior = prior if isinstance(prior, dict) else {}
+            prior.setdefault("last_invalidation", None)
+            prior.setdefault("last_structure_change", None)
+            if name in ("Daily", "4H"):
+                prior.setdefault("last_range_break", None)
+            history[name] = prior
             return (
                 f"{name}: STRUCTURE CONFIRMATION HELD — data-integrity review required "
                 f"({validation_note}); previous history preserved"
