@@ -188,7 +188,7 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertIsNone(state["invalidation_history"]["Daily"]["last_invalidation"])
 
     def test_four_hour_range_downside_break_is_recorded_on_completed_4h_close(self):
-        frame = self._frame(close=1.09)
+        frame = InvalidationHistoryTests._frame(close=1.09)
         state = {"invalidation_history": {"4H": {
             "direction": "RANGE", "active_boundary": None,
             "last_checked_candle": "old",
