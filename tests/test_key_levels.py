@@ -3,10 +3,11 @@ import unittest
 import pandas as pd
 
 from combined_xrp_intel_report import (
-    _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
-    _structural_validation_lines, _uniq_levels, build_invalidation_status,
-    calculate_market_confidence, calculate_scalper_confidence, scalper_outlook,
-    position_outlook, validate_4h_candle_integrity, volume_analysis,
+    _format_candle_confirmation, _format_swing_pair, _range_floor_watch_line,
+    _last_swing_dates, _range_width_pct, _recent_daily_range,
+    _structural_validation_lines, _uniq_levels,
+    build_invalidation_status, calculate_market_confidence, calculate_scalper_confidence,
+    scalper_outlook, position_outlook, validate_4h_candle_integrity, volume_analysis,
 )
 
 
@@ -31,6 +32,22 @@ class KeyLevelTests(unittest.TestCase):
 
     def test_range_width_rejects_invalid_bounds(self):
         self.assertEqual(_range_width_pct(1.2, 1.4), 0.0)
+
+    def test_nearby_range_floor_is_labeled_as_a_test_not_a_confirmed_break(self):
+        line = _range_floor_watch_line(1.1507, 1.1503)
+        self.assertIn("20D range-floor test: $1.1503", line)
+        self.assertIn("completed 4H close below", line)
+
+    def test_price_below_range_floor_is_not_called_a_confirmed_break(self):
+        line = _range_floor_watch_line(1.1490, 1.1503)
+        self.assertIn("range-floor breach watch", line)
+        self.assertIn("completed 4H close below", line)
+
+    def test_confirmation_timestamp_shows_candle_open_and_close(self):
+        self.assertEqual(
+            _format_candle_confirmation("2026-11-07 04:00 UTC", 240),
+            "confirmation close 2026-11-07 04:00 UTC (candle opened 2026-11-07 00:00 UTC)",
+        )
 
     def test_bullish_daily_structure_uses_lower_pivot_as_invalidation(self):
         self.assertEqual(
@@ -287,7 +304,7 @@ class InvalidationHistoryTests(unittest.TestCase):
 
     def test_same_candle_does_not_create_duplicate_invalidation(self):
         frame = self._frame(close=1.19)
-        stamp = frame.index[-1].strftime("%Y-%m-%d %H:%M UTC")
+        stamp = (frame.index[-1] + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M UTC")
         state = {"invalidation_history": {"4H": {
             "direction": "BULLISH", "active_boundary": 1.20,
             "last_checked_candle": stamp,

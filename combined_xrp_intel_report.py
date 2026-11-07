@@ -985,14 +985,40 @@ def _structure_direction(label: str) -> str:
     return "UNKNOWN"
 
 
-def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str]:
-    if df is None or df.empty or "close" not in df.columns: return None, "unavailable"
+def _frame_close_stamp(
+    df: Optional[pd.DataFrame], interval_minutes: int,
+) -> Tuple[Optional[float], str]:
+    """Return the close and its confirmation time (index timestamps are candle opens)."""
+    if df is None or df.empty or "close" not in df.columns:
+        return None, "unavailable"
     try:
         close = float(df["close"].iloc[-1])
-        stamp = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d %H:%M UTC") if isinstance(df.index, pd.DatetimeIndex) else "time unavailable"
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return close, "time unavailable"
+        close_time = pd.Timestamp(df.index[-1]) + pd.Timedelta(minutes=interval_minutes)
+        stamp = close_time.strftime("%Y-%m-%d %H:%M UTC")
         return close, stamp
     except Exception:
         return None, "unavailable"
+
+
+def _format_candle_confirmation(
+    stamp: str, interval_minutes: int, timestamp_is_close: bool = True,
+) -> str:
+    """Label candle-open and confirmation-close times, including legacy open-time records."""
+    try:
+        recorded_time = pd.to_datetime(stamp, utc=True)
+        close_time = (
+            recorded_time if timestamp_is_close
+            else recorded_time + pd.Timedelta(minutes=interval_minutes)
+        )
+        open_time = close_time - pd.Timedelta(minutes=interval_minutes)
+        return (
+            f"confirmation close {close_time.strftime('%Y-%m-%d %H:%M UTC')} "
+            f"(candle opened {open_time.strftime('%Y-%m-%d %H:%M UTC')})"
+        )
+    except Exception:
+        return f"confirmation close {close_stamp}"
 
 
 
@@ -1098,7 +1124,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             completed = frame.loc[closed_mask]
             if completed.empty:
                 return None, None
-            close, stamp = _frame_close_stamp(completed)
+            close, stamp = _frame_close_stamp(completed, interval_minutes)
         except Exception:
             return None, None
         if close is None or not np.isfinite(close) or close <= 0 or stamp == "unavailable":
@@ -1152,11 +1178,13 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 "boundary": float(old_boundary),
                 "close": close,
                 "at": stamp,
+                "timestamp_basis": "close",
                 "confirmation": confirm_rule,
             }
         elif old_direction not in ("UNKNOWN", direction) and not already_checked:
             last_change = {
                 "from": old_direction, "to": direction, "at": stamp,
+                "timestamp_basis": "close",
                 "close": close, "note": "label transition; prior boundary not breached",
             }
 
@@ -1187,12 +1215,13 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                 if close < float(range_low):
                     range_break = {
                         "direction": "DOWNSIDE", "boundary": float(range_low),
-                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                        "close": close, "at": stamp, "timestamp_basis": "close", "confirmation": confirm_rule,
                     }
                 elif close > float(range_high):
                     range_break = {
                         "direction": "UPSIDE", "boundary": float(range_high),
-                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                        "close": close, "at": stamp, "timestamp_basis": "close",
+                        "confirmation": confirm_rule,
                     }
         if range_break is not None:
             last_range_break = range_break
@@ -1240,19 +1269,23 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             last_text = (
                 f"last confirmed invalidation: {last_event['from']} boundary "
                 f"{_fmt_px(last_event['boundary'])} broken {last_event['confirmation']} "
-                f"{last_event['at']} (close {_fmt_px(last_event['close'])})"
+                f"{_format_candle_confirmation(last_event['at'], 240, last_event.get('timestamp_basis') == 'close')} "
+                f"(close {_fmt_px(last_event['close'])})"
             )
         else:
             last_text = "last confirmed invalidation: none recorded"
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
-            last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
-                          f"at {last_change['at']} (boundary not breached)")
+            last_text += (
+                f"; last label transition: {last_change['from']} → {last_change['to']} "
+                f"{_format_candle_confirmation(last_change['at'], 240, last_change.get('timestamp_basis') == 'close')} (boundary not breached)"
+            )
         if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
                     f"last close-confirmed swing-range break: {last_range_break['direction']} "
-                    f"{last_range_break['at']} ({last_range_break['confirmation']} "
-                    f"{_fmt_px(last_range_break['boundary'])}; close {_fmt_px(last_range_break['close'])})"
+                    f"{_format_candle_confirmation(last_range_break['at'], 240, last_range_break.get('timestamp_basis') == 'close')} "
+                    f"({last_range_break['confirmation']} {_fmt_px(last_range_break['boundary'])}; "
+                    f"close {_fmt_px(last_range_break['close'])})"
                 )
                 if last_range_break["direction"] == "DOWNSIDE" and close < float(last_range_break["boundary"]):
                     range_text = "ACTIVE DOWNSIDE BREAK — " + range_text + "; price remains below broken boundary"
@@ -1299,14 +1332,15 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         old = prior.get("direction", "UNKNOWN")
         last_shift = prior.get("last_bias_shift")
         if old not in ("UNKNOWN", direction) and prior.get("last_checked_candle") != stamp:
-            last_shift = {"from": old, "to": direction, "at": stamp, "close": close}
+            last_shift = {"from": old, "to": direction, "at": stamp, "timestamp_basis": "close", "close": close}
         history[name] = {
             "direction": direction,
             "last_bias_shift": last_shift,
             "last_checked_candle": stamp,
         }
         last_text = (
-            f"last bias shift: {last_shift['from']} → {last_shift['to']} at {last_shift['at']}"
+            f"last bias shift: {last_shift['from']} → {last_shift['to']} "
+            f"{_format_candle_confirmation(last_shift['at'], interval_minutes, last_shift.get('timestamp_basis') == 'close')}"
             if last_shift else "last bias shift: none recorded"
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
@@ -1502,6 +1536,28 @@ def format_volume_profile(price: float, vp: Dict[str, Any]) -> str:
     )
 
 
+def _range_floor_watch_line(price: float, range_low: float) -> Optional[str]:
+    """Describe a nearby/breached 20D floor without treating spot alone as confirmation."""
+    try:
+        price_value, floor_value = float(price), float(range_low)
+        if not np.isfinite(price_value) or not np.isfinite(floor_value) or floor_value <= 0:
+            return None
+        if price_value < floor_value:
+            return (
+                f"20D range-floor breach watch: spot is below {_fmt_px(floor_value)}; "
+                "a completed 4H close below it is needed to confirm acceptance beneath the floor"
+            )
+        distance_pct = (price_value - floor_value) / floor_value * 100.0
+        if distance_pct <= 0.5:
+            return (
+                f"20D range-floor test: {_fmt_px(floor_value)}; "
+                "watch for a completed 4H close below this level before treating it as a confirmed break"
+            )
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
 def build_levels_block(
     price: float,
     df_daily: pd.DataFrame,
@@ -1538,6 +1594,9 @@ def build_levels_block(
             f"20D range {_fmt_px(range_lo)}–{_fmt_px(range_hi)} • mid {_fmt_px(mid)} "
             f"• width {span_pct:.1f}% of mid • {_range_location(price, range_hi, range_lo)}"
         )
+        floor_watch = _range_floor_watch_line(price, range_lo)
+        if floor_watch:
+            lines.append(floor_watch)
     if h_hi is not None and h_lo is not None:
         lines.append(f"4H confirmed swing pivots (low / high): {_fmt_px(h_lo)} / {_fmt_px(h_hi)}")
 
