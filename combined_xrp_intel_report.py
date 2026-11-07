@@ -1090,20 +1090,26 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                  and abs(float(last_range_break["boundary"]) - float(old_range_high)) < 1e-10)
             )
         )
-        if (name == "Daily" and old_direction == "RANGE" and direction == "RANGE"
-                and not already_checked and not same_range_break_already_recorded
-                and isinstance(old_range_low, (int, float))
-                and isinstance(old_range_high, (int, float))):
-            if close < float(old_range_low):
-                range_break = {
-                    "direction": "DOWNSIDE", "boundary": float(old_range_low),
-                    "close": close, "at": stamp, "confirmation": confirm_rule,
-                }
-            elif close > float(old_range_high):
-                range_break = {
-                    "direction": "UPSIDE", "boundary": float(old_range_high),
-                    "close": close, "at": stamp, "confirmation": confirm_rule,
-                }
+        # Track the confirmed swing range independently for Daily and 4H.
+        # On first use (including migration from older state files), seed the
+        # prior boundary from the latest confirmed pivots so an already-broken
+        # level is not silently treated as an intact range.
+        if name in ("Daily", "4H") and old_direction == "RANGE":
+            range_low = old_range_low if isinstance(old_range_low, (int, float)) else low
+            range_high = old_range_high if isinstance(old_range_high, (int, float)) else high
+            if (not already_checked and not same_range_break_already_recorded
+                    and isinstance(range_low, (int, float))
+                    and isinstance(range_high, (int, float))):
+                if close < float(range_low):
+                    range_break = {
+                        "direction": "DOWNSIDE", "boundary": float(range_low),
+                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                    }
+                elif close > float(range_high):
+                    range_break = {
+                        "direction": "UPSIDE", "boundary": float(range_high),
+                        "close": close, "at": stamp, "confirmation": confirm_rule,
+                    }
         if range_break is not None:
             last_range_break = range_break
 
@@ -1117,9 +1123,9 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                              if high is not None else "active invalidation boundary unavailable (no confirmed swing high)")
         elif direction == "RANGE":
             boundary_value = None
-            boundary_text = (f"confirmed Daily swing-pivot break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
+            boundary_text = (f"confirmed {name} swing-pivot break boundaries: {confirm_rule} below {_fmt_px(low)} / above {_fmt_px(high)}"
                              if high is not None and low is not None else
-                             "confirmed Daily swing-pivot break boundaries unavailable (insufficient pivots)")
+                             f"confirmed {name} swing-pivot break boundaries unavailable (insufficient pivots)")
         else:
             boundary_value = None
             boundary_text = "active boundary unavailable"
@@ -1138,9 +1144,9 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             "last_structure_change": last_change,
             "last_checked_candle": stamp,
         }
-        if name == "Daily":
-            # Keep the prior confirmed range while testing each new completed
-            # 4H candle, then roll forward to the latest confirmed pivots.
+        if name in ("Daily", "4H"):
+            # Keep each timeframe's prior confirmed range while testing its
+            # next completed candle, then roll forward to confirmed pivots.
             history_entry["active_range_low"] = low if low is not None else old_range_low
             history_entry["active_range_high"] = high if high is not None else old_range_high
             history_entry["last_range_break"] = last_range_break
@@ -1157,16 +1163,23 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
             last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
                           f"at {last_change['at']} (boundary not breached)")
-        if name == "Daily" and direction == "RANGE":
+        if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
-                    f"last confirmed range break: {last_range_break['direction']} "
+                    f"last confirmed swing-range break: {last_range_break['direction']} "
                     f"{last_range_break['at']} ({last_range_break['confirmation']} "
                     f"{_fmt_px(last_range_break['boundary'])}; close {_fmt_px(last_range_break['close'])})"
                 )
+                if last_range_break["direction"] == "DOWNSIDE" and close < float(last_range_break["boundary"]):
+                    range_text += "; price remains below broken boundary"
+                elif last_range_break["direction"] == "UPSIDE" and close > float(last_range_break["boundary"]):
+                    range_text += "; price remains above broken boundary"
+                else:
+                    range_text += "; boundary has since been reclaimed"
             else:
-                range_text = "last confirmed range break: none recorded"
-            return f"{name} {direction}: {range_text}; {boundary_text}"
+                range_text = "last confirmed swing-range break: none recorded"
+            pattern_note = " (pivot pattern remains non-trending)" if direction == "RANGE" else ""
+            return f"{name} {direction}{pattern_note}: {range_text}; {boundary_text}"
         return f"{name} {direction}: {last_text}; {boundary_text}"
 
     lines = [
@@ -1454,6 +1467,26 @@ def build_levels_block(
         lines.append(f"Loss of {_fmt_px(sup[0])} → short-term weakness increases")
 
     lines.extend(_structural_validation_lines(daily_struct, d_hi, d_lo))
+    history = state.get("invalidation_history", {}) if isinstance(state, dict) else {}
+    broken_supports = []
+    if isinstance(history, dict):
+        for timeframe in ("Daily", "4H"):
+            entry = history.get(timeframe, {})
+            event = entry.get("last_range_break") if isinstance(entry, dict) else None
+            if isinstance(event, dict) and event.get("direction") == "DOWNSIDE":
+                boundary = event.get("boundary")
+                if isinstance(boundary, (int, float)) and price < float(boundary):
+                    broken_supports.append((float(boundary), timeframe, event.get("at", "")))
+    if broken_supports:
+        unique = []
+        seen = set()
+        for level, timeframe, stamp in sorted(broken_supports, key=lambda item: item[0], reverse=True):
+            key = round(level, 10)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(f"{_fmt_px(level)} ({timeframe}, {stamp})")
+        lines.append("Potential resistance — confirmed broken swing support: " + " / ".join(unique))
 
     ranging = ("Ranging" in (daily_struct or "") or "Choppy" in (daily_struct or "")) and (
         "Ranging" in (h4_struct or "") or "Choppy" in (h4_struct or "")
@@ -1464,9 +1497,9 @@ def build_levels_block(
     if ranging:
         short = [f"{tf} {k.lower()}" for tf, k in (("1H", k1), ("15m", k15), ("5m", k5)) if k != "NEUTRAL"]
         if short:
-            lines.append("Note: Higher TF unconfirmed. Short TF " + " / ".join(short) + " inside Daily range.")
+            lines.append("Note: Daily/4H pivot pattern is choppy; short TF " + " / ".join(short) + ".")
         else:
-            lines.append("Note: Higher TF unconfirmed. No short-TF alignment.")
+            lines.append("Note: Daily/4H pivot pattern is choppy; no short-TF alignment.")
 
     return "\n".join(lines)
 
@@ -1673,7 +1706,8 @@ def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_st
     elif bullish == 1 and bearish == 1:
         score, direction = 35.0, "MIXED"
     elif ranging == 2:
-        score, direction = 72.0, "RANGE"
+        # A range label is low directional conviction, not a high-confidence setup.
+        score, direction = 50.0, "RANGE"
     else:
         score, direction = 40.0, "UNKNOWN"
     if direction == "BULLISH":
@@ -1806,6 +1840,7 @@ def extension_level(rsi_val: int, bb: dict) -> str:
 
 def position_outlook(
     daily_struct: str, h4_struct: str, rsi_val: int, bb: dict, confidence: int,
+    price: Optional[float] = None, invalidation_history: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     ranging_count = sum("Ranging" in (s or "") or "Choppy" in (s or "") for s in (daily_struct, h4_struct))
     bull_count = sum("Bullish" in (s or "") for s in (daily_struct, h4_struct))
@@ -1821,7 +1856,26 @@ def position_outlook(
         if ext in ("High", "Elevated"):
             headline = "BEARISH — EXTENDED"
     elif ranging_count == 2:
-        headline, trend, stance = "NEUTRAL — Daily/4H Range", "Unconfirmed", "NEUTRAL"
+        headline, trend, stance = "NEUTRAL — Daily/4H Pivot Range", "No aligned higher-timeframe trend", "NEUTRAL"
+        history = invalidation_history if isinstance(invalidation_history, dict) else {}
+        active_breaks = []
+        for timeframe in ("Daily", "4H"):
+            entry = history.get(timeframe, {})
+            event = entry.get("last_range_break") if isinstance(entry, dict) else None
+            if not isinstance(event, dict) or not isinstance(price, (int, float)):
+                continue
+            boundary = event.get("boundary")
+            if not isinstance(boundary, (int, float)):
+                continue
+            still_broken = (
+                event.get("direction") == "DOWNSIDE" and price < float(boundary)
+            ) or (
+                event.get("direction") == "UPSIDE" and price > float(boundary)
+            )
+            if still_broken:
+                active_breaks.append(f"{timeframe} {event['direction'].lower()} break")
+        if active_breaks:
+            headline = "NEUTRAL — " + " / ".join(active_breaks) + " active"
     elif bull_count == 1 or bear_count == 1:
         headline, trend, stance = "MIXED — Partial Higher-TF Trend", "Partially confirmed", "MIXED"
     else:
@@ -2314,7 +2368,10 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     scalper_confidence, scalp_note = calculate_scalper_confidence(
         bias_1h, bias_15m, bias_5m, rsi_15m, bb, has_15m, has_5m,
     )
-    pos_out = position_outlook(daily_struct, h4_struct, rsi_4h, bb, position_confidence)
+    pos_out = position_outlook(
+        daily_struct, h4_struct, rsi_4h, bb, position_confidence,
+        price=price, invalidation_history=state.get("invalidation_history", {}),
+    )
     scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
     invalidation_text = build_invalidation_status(
         state, df_daily, df_4h, hourly, df_15m if has_15m else None,
@@ -2368,7 +2425,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="🎯 Position Outlook",
         value=(
             f"**{pos_out['headline']}**\n"
-            f"Signal Strength: {position_confidence}/100\n"
+            f"HTF Conviction (heuristic, not probability): {position_confidence}/100\n"
             f"Trend: {pos_out['trend']}\n"
             f"Extension: {pos_out['extension']}"
         ),
@@ -2378,7 +2435,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="⚡ Scalper Outlook",
         value=(
             f"**{scalp_out['headline']}**\n"
-            f"Signal Strength: {scalper_confidence}/100{scalp_note}\n"
+            f"Setup Conviction (heuristic, not probability): {scalper_confidence}/100{scalp_note}\n"
             f"{scalp_out['align']}\n"
             f"5m: {scalp_out['five']}\n"
             f"Extension: {scalp_out['extension']}"
@@ -2437,8 +2494,8 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
                 f"📊 ${coin} {tweet_time}\n"
                 f"💰 {_fmt_px(price)} ({change_24h:+.2f}%)\n"
                 f"🧭 {condition}\n"
-                f"🎯 {pos_out['headline']} (strength {position_confidence}/100)\n"
-                f"⚡ {scalp_out['headline']} (strength {scalper_confidence}/100)\n"
+                f"🎯 {pos_out['headline']} (HTF heuristic {position_confidence}/100)\n"
+                f"⚡ {scalp_out['headline']} (setup heuristic {scalper_confidence}/100)\n"
                 f"1H:{bias_1h['bias']} 15m:{bias_15m['bias']} 5m:{bias_5m['bias']}\n"
                 f"{tweet_hashtags(coin)}"
             )

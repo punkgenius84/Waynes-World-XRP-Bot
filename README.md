@@ -12,6 +12,14 @@ The separate 12-minute surge workflow is **currently disabled**. Its file is ret
 
 The active scheduled workflow runs the normal report six times per day. Its `RUN_MODE=report` setting keeps that behavior distinct from the optional `RUN_MODE=surge` path.
 
+## Structure and score interpretation
+
+Daily and 4H swing structure are tracked independently. A confirmed swing-range break is recorded only from a completed 4H candle close; the report preserves the broken boundary, close, timestamp, and whether price remains beyond it or has reclaimed it. The rolling 20-day high/low range is a separate measurement and must not be confused with a Daily or 4H swing-pivot break.
+
+Confirmed downside breaks can be shown as **potential resistance / broken swing support** while price remains below the level. This is a role-change candidate, not an assertion that resistance has already been retested or confirmed.
+
+The report's HTF and scalper scores are heuristic conviction/alignment measures, **not probabilities or win rates**. A neutral pivot-range classification starts at a neutral baseline rather than receiving an artificially elevated score.
+
 ## Optional integrations and secrets
 
 `DISCORD_WEBHOOK_XRP` is used for the market report. Optional integrations: set `enable_news: true` and configure `DISCORD_WEBHOOK_NEWS` to enable news collection/posting; set `post_reports_to_x: true` and configure `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, and `X_ACCESS_SECRET` to enable X posting. Both integrations are disabled by default.
