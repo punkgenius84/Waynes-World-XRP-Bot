@@ -1266,8 +1266,10 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         else:
             last_text = "last confirmed invalidation: none recorded"
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
-            last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
-                          f"at {last_change['at']} (boundary not breached)")
+            last_text += (
+                f"; last label transition: {last_change['from']} → {last_change['to']} "
+                f"{_format_candle_confirmation(last_change['at'], 240)} (boundary not breached)"
+            )
         if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
@@ -1328,7 +1330,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
             "last_checked_candle": stamp,
         }
         last_text = (
-            f"last bias shift: {last_shift['from']} → {last_shift['to']} at {last_shift['at']}"
+            f"last bias shift: {last_shift['from']} → {last_shift['to']} "
+            f"{_format_candle_confirmation(last_shift['at'], interval_minutes)}"
             if last_shift else "last bias shift: none recorded"
         )
         lines.append(f"{name} EMA bias {direction}: {last_text}; EMA shift only, not a structural invalidation")
