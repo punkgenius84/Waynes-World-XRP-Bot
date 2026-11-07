@@ -18,7 +18,9 @@ Daily and 4H swing structure are tracked independently. A confirmed swing-range 
 
 Confirmed downside breaks can be shown as **potential resistance / broken swing support** while price remains below the level. This is a role-change candidate, not an assertion that resistance has already been retested or confirmed.
 
-The report's HTF and scalper scores are heuristic conviction/alignment measures, **not probabilities or win rates**. A neutral pivot-range classification starts at a neutral baseline rather than receiving an artificially elevated score.
+The report's HTF and scalper scores are heuristic conviction/alignment measures, **not probabilities or win rates**. Scalper directional alignment is separate from fresh-entry quality: extended conditions are explicitly flagged as low quality for chasing, even when 1H/15m/5m direction agrees. A neutral pivot-range classification starts at a neutral baseline rather than receiving an artificially elevated score.
+
+A swing-range break is printed with separate **broken boundary** and **confirming candle close** values. Daily and 4H can retain a non-trending pivot-pattern classification while also showing an active downside/upside swing break. Before recording a new structural break, the bot validates completed 4H candle OHLC consistency, UTC 4H timestamp alignment, adjacent-candle continuity, and the close-to-close move. A failed check holds the new confirmation, preserves prior structural history, and prints a data-integrity review warning; it does not silently discard the historical event.
 
 ## Optional integrations and secrets
 
