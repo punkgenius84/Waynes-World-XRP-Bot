@@ -1094,7 +1094,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         # On first use (including migration from older state files), seed the
         # prior boundary from the latest confirmed pivots so an already-broken
         # level is not silently treated as an intact range.
-        if name in ("Daily", "4H") and old_direction == "RANGE" and direction == "RANGE":
+        if name in ("Daily", "4H") and old_direction == "RANGE":
             range_low = old_range_low if isinstance(old_range_low, (int, float)) else low
             range_high = old_range_high if isinstance(old_range_high, (int, float)) else high
             if (not already_checked and not same_range_break_already_recorded
@@ -1163,7 +1163,7 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if last_change and (not last_event or last_change.get("at", "") > last_event.get("at", "")):
             last_text += (f"; last label transition: {last_change['from']} → {last_change['to']} "
                           f"at {last_change['at']} (boundary not breached)")
-        if name in ("Daily", "4H") and direction == "RANGE":
+        if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
                     f"last confirmed swing-range break: {last_range_break['direction']} "
@@ -1178,7 +1178,8 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
                     range_text += "; boundary has since been reclaimed"
             else:
                 range_text = "last confirmed swing-range break: none recorded"
-            return f"{name} {direction} (pivot pattern remains non-trending): {range_text}; {boundary_text}"
+            pattern_note = " (pivot pattern remains non-trending)" if direction == "RANGE" else ""
+            return f"{name} {direction}{pattern_note}: {range_text}; {boundary_text}"
         return f"{name} {direction}: {last_text}; {boundary_text}"
 
     lines = [
