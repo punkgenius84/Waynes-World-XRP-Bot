@@ -995,15 +995,99 @@ def _frame_close_stamp(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], str
         return None, "unavailable"
 
 
+
+def validate_4h_candle_integrity(
+    hourly: Optional[pd.DataFrame],
+    df_4h: Optional[pd.DataFrame],
+    max_move_pct: float = 4.0,
+    volume_ratio: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Validate the latest completed 4H bar against its four 1H source bars."""
+    result: Dict[str, Any] = {
+        "status": "NO DATA",
+        "note": "4H candle integrity unavailable (insufficient hourly history)",
+        "move_pct": None,
+    }
+    required = {"open", "high", "low", "close", "volume"}
+    if (hourly is None or hourly.empty or df_4h is None or df_4h.empty
+            or not required.issubset(hourly.columns)
+            or not required.issubset(df_4h.columns)
+            or not isinstance(hourly.index, pd.DatetimeIndex)
+            or not isinstance(df_4h.index, pd.DatetimeIndex)):
+        return result
+    try:
+        hourly = hourly.copy()
+        hourly.index = pd.to_datetime(hourly.index, utc=True)
+        four_hour = df_4h.copy()
+        four_hour.index = pd.to_datetime(four_hour.index, utc=True)
+        now = pd.Timestamp.now(tz="UTC")
+        completed = four_hour.loc[four_hour.index + pd.Timedelta(hours=4) <= now]
+        if len(completed) < 2:
+            return result
+        stamp = completed.index[-1]
+        candle = completed.iloc[-1]
+        previous = completed.iloc[-2]
+        source = hourly.loc[(hourly.index >= stamp) & (hourly.index < stamp + pd.Timedelta(hours=4))]
+        expected = pd.date_range(stamp, periods=4, freq="1h")
+        if len(source) != 4 or not source.index.equals(expected):
+            result.update(status="UNVERIFIED", note=f"4H source coverage incomplete ({len(source)}/4 hourly candles); verify feed before relying on the break")
+            return result
+        values = source[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+        if (not np.isfinite(values.to_numpy()).all()
+                or (values[["open", "high", "low", "close"]] <= 0).any().any()
+                or (values["volume"] < 0).any()
+                or (values["high"] < values[["open", "close", "low"]].max(axis=1)).any()
+                or (values["low"] > values[["open", "close", "high"]].min(axis=1)).any()):
+            result.update(status="UNVERIFIED", note="4H source candles contain invalid OHLCV values; verify feed before relying on the break")
+            return result
+        aggregate = {
+            "open": float(values["open"].iloc[0]),
+            "high": float(values["high"].max()),
+            "low": float(values["low"].min()),
+            "close": float(values["close"].iloc[-1]),
+            "volume": float(values["volume"].sum()),
+        }
+        for field, expected_value in aggregate.items():
+            actual = float(candle[field])
+            tolerance = max(1e-8, abs(expected_value) * 1e-5)
+            if not np.isfinite(actual) or abs(actual - expected_value) > tolerance:
+                result.update(status="UNVERIFIED", note=f"4H {field} does not match its four 1H source candles; verify feed before relying on the break")
+                return result
+        prior_close, current_close = float(previous["close"]), float(candle["close"])
+        if prior_close <= 0 or current_close <= 0:
+            result.update(status="UNVERIFIED", note="4H close is invalid; verify feed before relying on the break")
+            return result
+        move_pct = (current_close - prior_close) / prior_close * 100.0
+        result["move_pct"] = round(move_pct, 2)
+        if abs(move_pct) >= float(max_move_pct):
+            low_volume_note = (
+                f"; reported 4H volume is only {volume_ratio:.2f}x average"
+                if volume_ratio is not None and np.isfinite(volume_ratio) and volume_ratio < 0.25
+                else ""
+            )
+            result.update(status="FLAG", note=f"unusually large 4H close-to-close move ({move_pct:+.2f}%){low_volume_note}; check source data before treating the break as fully verified")
+        else:
+            result.update(status="OK", note=f"4H OHLCV matches four hourly candles; close-to-close move {move_pct:+.2f}%")
+        return result
+    except Exception as exc:
+        return {"status": "UNVERIFIED", "note": f"4H integrity check failed ({type(exc).__name__}); verify feed before relying on the break", "move_pct": None}
+
 def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m,
-                              daily_struct, h4_struct, bias_1h, bias_15m, bias_5m) -> str:
+                              daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+                              data_integrity: Optional[Dict[str, Any]] = None) -> str:
     """Track confirmed boundary breaks and EMA shifts without promoting missing data."""
     history = state_data.setdefault("invalidation_history", {})
     if not isinstance(history, dict):
         history = {}
         state_data["invalidation_history"] = history
+    integrity = data_integrity if isinstance(data_integrity, dict) else {}
+    integrity_status = str(integrity.get("status", "NO DATA")).upper()
 
     def close_and_stamp(frame, interval_minutes):
+        # Do not promote a Daily/4H break from a candle whose source data
+        # failed validation. Preserve the previous structural event instead.
+        if interval_minutes == 240 and integrity_status == "UNVERIFIED":
+            return None, None
         # Exchange candle timestamps mark candle opens. Exclude the currently
         # forming candle so only a completed close can confirm a boundary break.
         if frame is None or frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
@@ -1166,26 +1250,31 @@ def build_invalidation_status(state_data, df_daily, df_4h, hourly, df_15m, df_5m
         if name in ("Daily", "4H") and (direction == "RANGE" or last_range_break):
             if last_range_break:
                 range_text = (
-                    f"last confirmed swing-range break: {last_range_break['direction']} "
+                    f"last close-confirmed swing-range break: {last_range_break['direction']} "
                     f"{last_range_break['at']} ({last_range_break['confirmation']} "
                     f"{_fmt_px(last_range_break['boundary'])}; close {_fmt_px(last_range_break['close'])})"
                 )
                 if last_range_break["direction"] == "DOWNSIDE" and close < float(last_range_break["boundary"]):
-                    range_text += "; price remains below broken boundary"
+                    range_text = "ACTIVE DOWNSIDE BREAK — " + range_text + "; price remains below broken boundary"
                 elif last_range_break["direction"] == "UPSIDE" and close > float(last_range_break["boundary"]):
-                    range_text += "; price remains above broken boundary"
+                    range_text = "ACTIVE UPSIDE BREAK — " + range_text + "; price remains above broken boundary"
                 else:
                     range_text += "; boundary has since been reclaimed"
             else:
-                range_text = "last confirmed swing-range break: none recorded"
-            pattern_note = " (pivot pattern remains non-trending)" if direction == "RANGE" else ""
-            return f"{name} {direction}{pattern_note}: {range_text}; {boundary_text}"
+                range_text = "no confirmed swing-range break recorded"
+            if direction == "RANGE":
+                return f"{name} pivot pattern: RANGE/CHOPPY; directional break status: {range_text}; {boundary_text}"
+            return f"{name} {direction}: {range_text}; {boundary_text}"
         return f"{name} {direction}: {last_text}; {boundary_text}"
 
     lines = [
         update_structure("Daily", df_daily, df_4h, daily_struct, "4H candle close"),
         update_structure("4H", df_4h, df_4h, h4_struct, "4H candle close"),
     ]
+    if integrity_status in ("FLAG", "UNVERIFIED"):
+        note = integrity.get("note", "verification required")
+        lines[0] += f"; 4H source integrity {integrity_status}: {note}"
+        lines[1] += f"; candle integrity {integrity_status}: {note}"
 
     for name, frame, bias in (
         ("1H", hourly, bias_1h),
@@ -1644,13 +1733,28 @@ def _fmt_compact_usd(n: float) -> str:
     return f"{sign}${n:,.0f}"
 
 
-def volume_analysis(df: Optional[pd.DataFrame], lookback: int = 20) -> Dict[str, Any]:
+def volume_analysis(
+    df: Optional[pd.DataFrame], lookback: int = 20,
+    interval_minutes: Optional[int] = None,
+) -> Dict[str, Any]:
     empty = {"last": 0.0, "avg": 0.0, "ratio": 1.0, "label": "No Data",
               "direction": "Flat", "read": "No Data"}
-    if df is None or len(df) < lookback + 1 or "volume" not in df.columns:
+    if df is None or df.empty or "volume" not in df.columns:
+        return empty
+    work = df
+    # Compare like-for-like completed candles. A forming 4H candle sampled
+    # 20 minutes after its open must never be called 0.1x-average participation.
+    if interval_minutes and isinstance(df.index, pd.DatetimeIndex):
+        try:
+            utc_index = pd.to_datetime(df.index, utc=True)
+            completed_mask = utc_index + pd.to_timedelta(interval_minutes, unit="m") <= pd.Timestamp.now(tz="UTC")
+            work = df.loc[completed_mask]
+        except Exception:
+            return empty
+    if len(work) < lookback + 1:
         return empty
 
-    vol  = df["volume"]
+    vol  = work["volume"]
     last = float(vol.iloc[-1])
     avg  = float(vol.iloc[-(lookback + 1):-1].mean())
 
@@ -1669,8 +1773,8 @@ def volume_analysis(df: Optional[pd.DataFrame], lookback: int = 20) -> Dict[str,
     else:
         label = "Very Low"
 
-    last_open  = float(df["open"].iloc[-1])
-    last_close = float(df["close"].iloc[-1])
+    last_open  = float(work["open"].iloc[-1])
+    last_close = float(work["close"].iloc[-1])
     if last_close > last_open:
         direction = "Up"
     elif last_close < last_open:
@@ -1690,7 +1794,7 @@ def volume_analysis(df: Optional[pd.DataFrame], lookback: int = 20) -> Dict[str,
         read = f"{direction} Move — Normal Volume"
 
     return {"last": last, "avg": avg, "ratio": round(ratio, 2), "label": label,
-             "direction": direction, "read": read}
+             "direction": direction, "read": read, "basis": "last completed candle"}
 
 
 def calculate_market_confidence(bb: dict, rsi_val: int, daily_struct: str, h4_struct: str) -> int:
@@ -1875,7 +1979,9 @@ def position_outlook(
             if still_broken:
                 active_breaks.append(f"{timeframe} {event['direction'].lower()} break")
         if active_breaks:
-            headline = "NEUTRAL — " + " / ".join(active_breaks) + " active"
+            headline = "NEUTRAL BIAS — ACTIVE " + " / ".join(active_breaks).upper()
+        if ext in ("High", "Elevated"):
+            headline += " — EXTENDED"
     elif bull_count == 1 or bear_count == 1:
         headline, trend, stance = "MIXED — Partial Higher-TF Trend", "Partially confirmed", "MIXED"
     else:
@@ -2339,7 +2445,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     print(f"✓ {coin}: report price {price:.6f} ({price_src})  24h {change_24h:+.2f}%")
 
     bb           = bollinger_analysis(df_4h)
-    vol_4h       = volume_analysis(df_4h)
+    vol_4h       = volume_analysis(df_4h, interval_minutes=240)
     rsi_4h, rsi_4h_label = rsi_from_frame(df_4h)
     if rsi_4h is None:
         rsi_4h = 50
@@ -2362,20 +2468,26 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         bias_5m = run_scalper_ema(df_5m)
 
     rsi_15m, rsi_15m_label = rsi_from_frame(df_15m if has_15m else None)
-    vol_15m = volume_analysis(df_15m if has_15m else None)
+    vol_15m = volume_analysis(df_15m if has_15m else None, interval_minutes=15)
 
     position_confidence = calculate_market_confidence(bb, rsi_4h, daily_struct, h4_struct)
     scalper_confidence, scalp_note = calculate_scalper_confidence(
         bias_1h, bias_15m, bias_5m, rsi_15m, bb, has_15m, has_5m,
     )
-    pos_out = position_outlook(
-        daily_struct, h4_struct, rsi_4h, bb, position_confidence,
-        price=price, invalidation_history=state.get("invalidation_history", {}),
-    )
     scalp_out = scalper_outlook(bias_1h, bias_15m, bias_5m, rsi_15m, bb, scalper_confidence)
+    data_integrity = validate_4h_candle_integrity(
+        hourly, df_4h, volume_ratio=vol_4h.get("ratio") if vol_4h.get("label") != "No Data" else None,
+    )
     invalidation_text = build_invalidation_status(
         state, df_daily, df_4h, hourly, df_15m if has_15m else None,
         df_5m if has_5m else None, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
+        data_integrity=data_integrity,
+    )
+    # Build Position Outlook after invalidation tracking so a newly confirmed
+    # break appears in this report rather than waiting for the next run.
+    pos_out = position_outlook(
+        daily_struct, h4_struct, rsi_4h, bb, position_confidence,
+        price=price, invalidation_history=state.get("invalidation_history", {}),
     )
     levels_text = build_levels_block(
         price, df_daily, df_4h, hourly, daily_struct, h4_struct, bias_1h, bias_15m, bias_5m,
@@ -2399,16 +2511,22 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
     if vol_4h["label"] != "No Data":
         embed.add_embed_field(
             name="📊 Volume (4H)",
-            value=f"{_fmt_compact_usd(vol_4h['last'])}\n{vol_4h['ratio']:.2f}x avg — {vol_4h['label']}\n{vol_4h['read']}",
+            value=f"{_fmt_compact_usd(vol_4h['last'])}\n{vol_4h['ratio']:.2f}x avg — {vol_4h['label']}\n{vol_4h['read']}\nLast completed 4H candle",
             inline=True,
         )
     if vol_15m["label"] != "No Data":
         embed.add_embed_field(
             name="📊 Volume (15m)",
-            value=f"{vol_15m['ratio']:.2f}x avg — {vol_15m['label']}\n{vol_15m['read']}",
+            value=f"{vol_15m['ratio']:.2f}x avg — {vol_15m['label']}\n{vol_15m['read']}\nLast completed 15m candle",
             inline=True,
         )
     embed.add_embed_field(name="🧭 Market Condition", value=condition, inline=False)
+    if data_integrity.get("status") in ("FLAG", "UNVERIFIED"):
+        embed.add_embed_field(
+            name=f"⚠️ 4H Data Integrity — {data_integrity['status']}",
+            value=str(data_integrity.get("note", "4H candle requires verification"))[:1024],
+            inline=False,
+        )
     embed.add_embed_field(name="📐 Structure",  value=f"Daily: {daily_struct}\n4H: {h4_struct}",    inline=False)
     embed.add_embed_field(name="📍 Key Levels", value=levels_text[:1024], inline=False)
     # Give every timeframe its own full-width Discord field so spacing is

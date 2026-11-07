@@ -20,6 +20,8 @@ Confirmed downside breaks can be shown as **potential resistance / broken swing 
 
 The report's HTF and scalper scores are heuristic conviction/alignment measures, **not probabilities or win rates**. A neutral pivot-range classification starts at a neutral baseline rather than receiving an artificially elevated score.
 
+Volume comparisons use the most recent **completed** candle for each timeframe, not a still-forming candle with only partial elapsed volume. The latest completed 4H candle is checked against its four underlying hourly candles for coverage, OHLCV consistency, and unusually large close-to-close moves. A large but internally consistent move is flagged for source verification; missing or inconsistent source data is marked **UNVERIFIED** and cannot create a new Daily/4H structural-break record.
+
 ## Optional integrations and secrets
 
 `DISCORD_WEBHOOK_XRP` is used for the market report. Optional integrations: set `enable_news: true` and configure `DISCORD_WEBHOOK_NEWS` to enable news collection/posting; set `post_reports_to_x: true` and configure `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, and `X_ACCESS_SECRET` to enable X posting. Both integrations are disabled by default.
