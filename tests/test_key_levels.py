@@ -6,6 +6,7 @@ from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
     _structural_validation_lines, _uniq_levels, build_invalidation_status,
     calculate_market_confidence, calculate_scalper_confidence, scalper_outlook,
+    position_outlook, validate_4h_candle_integrity, volume_analysis,
 )
 
 
@@ -183,7 +184,7 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(event["direction"], "DOWNSIDE")
         self.assertEqual(event["boundary"], 1.20)
         self.assertEqual(event["close"], 1.19)
-        self.assertIn("last confirmed swing-range break: DOWNSIDE", text)
+        self.assertIn("last close-confirmed swing-range break: DOWNSIDE", text)
         self.assertIsNone(state["invalidation_history"]["Daily"]["last_invalidation"])
 
     def test_four_hour_range_downside_break_is_recorded_on_completed_4h_close(self):
@@ -201,7 +202,7 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(event["direction"], "DOWNSIDE")
         self.assertEqual(event["boundary"], 1.10)
         self.assertEqual(event["close"], 1.09)
-        self.assertIn("4H RANGE (pivot pattern remains non-trending)", text)
+        self.assertIn("4H pivot pattern: RANGE/CHOPPY; directional break status: ACTIVE DOWNSIDE BREAK", text)
         self.assertIn("price remains below broken boundary", text)
 
     def test_daily_range_upside_break_is_recorded_on_completed_4h_close(self):
@@ -399,6 +400,82 @@ class InvalidationHistoryTests(unittest.TestCase):
             {"dist_pct": 43.5}, 40, "Bearish (LH+LL)", "Bearish (LH+LL)",
         )
         self.assertEqual(bullish, bearish)
+
+
+class CandleIntegrityTests(unittest.TestCase):
+    @staticmethod
+    def _hourly_frame():
+        index = pd.date_range("2026-01-01", periods=48, freq="1h", tz="UTC")
+        frame = pd.DataFrame({
+            "open": [1.00] * 48,
+            "high": [1.01] * 48,
+            "low": [0.99] * 48,
+            "close": [1.00] * 48,
+            "volume": [10.0] * 48,
+        }, index=index)
+        return frame
+
+    def test_four_hour_ohlcv_matches_four_hourly_source_candles(self):
+        hourly = self._hourly_frame()
+        four_hour = hourly.resample("4h").agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum",
+        }).dropna()
+        result = validate_4h_candle_integrity(hourly, four_hour)
+        self.assertEqual(result["status"], "OK")
+        self.assertIn("matches four hourly candles", result["note"])
+
+    def test_large_four_hour_move_is_flagged_not_silently_discarded(self):
+        hourly = self._hourly_frame()
+        hourly.iloc[-4:, hourly.columns.get_loc("close")] = 0.94
+        hourly.iloc[-4:, hourly.columns.get_loc("low")] = 0.93
+        four_hour = hourly.resample("4h").agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum",
+        }).dropna()
+        result = validate_4h_candle_integrity(hourly, four_hour, volume_ratio=0.11)
+        self.assertEqual(result["status"], "FLAG")
+        self.assertAlmostEqual(result["move_pct"], -6.0, places=2)
+        self.assertIn("0.11x average", result["note"])
+        self.assertIn("check source data", result["note"])
+
+    def test_missing_hourly_source_candle_marks_four_hour_bar_unverified(self):
+        hourly = self._hourly_frame().drop(index=pd.Timestamp("2026-01-02 21:00", tz="UTC"))
+        four_hour = hourly.resample("4h").agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum",
+        }).dropna()
+        result = validate_4h_candle_integrity(hourly, four_hour)
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertIn("source coverage incomplete", result["note"])
+
+    def test_four_hour_volume_uses_last_completed_candle(self):
+        now_bucket = pd.Timestamp.now(tz="UTC").floor("4h")
+        index = pd.date_range(now_bucket - pd.Timedelta(hours=84), periods=22, freq="4h")
+        frame = pd.DataFrame({
+            "open": [1.0] * 22, "high": [1.1] * 22,
+            "low": [0.9] * 22, "close": [1.0] * 22,
+            "volume": [10.0] * 21 + [1.0],
+        }, index=index)
+        result = volume_analysis(frame, interval_minutes=240)
+        self.assertEqual(result["ratio"], 1.0)
+        self.assertEqual(result["last"], 10.0)
+        self.assertEqual(result["basis"], "last completed candle")
+
+    def test_neutral_position_outlook_labels_active_break_and_extension(self):
+        history = {
+            "Daily": {"last_range_break": {"direction": "DOWNSIDE", "boundary": 1.24}},
+            "4H": {"last_range_break": {"direction": "DOWNSIDE", "boundary": 1.23}},
+        }
+        result = position_outlook(
+            "Ranging/Choppy — Sideways", "Ranging/Choppy — Sideways",
+            12, {"dist_pct": 12.7}, 50, price=1.15,
+            invalidation_history=history,
+        )
+        self.assertEqual(
+            result["headline"],
+            "NEUTRAL BIAS — ACTIVE DAILY DOWNSIDE BREAK / 4H DOWNSIDE BREAK — EXTENDED",
+        )
 
 
 if __name__ == "__main__":
