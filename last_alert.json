@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-07 12:00 UTC",
+      "last_checked_candle": "2026-11-07 16:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -529,7 +529,7 @@
         "close": 1.308,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-07 12:00 UTC",
+      "last_checked_candle": "2026-11-07 16:00 UTC",
       "active_range_low": 1.2333,
       "active_range_high": 1.34,
       "last_range_break": {
@@ -548,7 +548,7 @@
         "at": "2026-11-05 15:00 UTC",
         "close": 1.2438
       },
-      "last_checked_candle": "2026-11-07 14:00 UTC"
+      "last_checked_candle": "2026-11-07 17:00 UTC"
     },
     "15m": {
       "direction": "NEUTRAL",
@@ -559,7 +559,7 @@
         "timestamp_basis": "close",
         "close": 1.1585
       },
-      "last_checked_candle": "2026-11-07 14:30 UTC"
+      "last_checked_candle": "2026-11-07 17:30 UTC"
     },
     "5m": {
       "direction": "BULLISH",
@@ -570,7 +570,7 @@
         "timestamp_basis": "close",
         "close": 1.1673
       },
-      "last_checked_candle": "2026-11-07 14:40 UTC"
+      "last_checked_candle": "2026-11-07 17:35 UTC"
     }
   }
 }
