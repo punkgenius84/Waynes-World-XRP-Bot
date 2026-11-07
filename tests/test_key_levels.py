@@ -47,7 +47,7 @@ class KeyLevelTests(unittest.TestCase):
     def test_confirmation_timestamp_shows_candle_open_and_close(self):
         self.assertEqual(
             _format_candle_confirmation("2026-11-07 04:00 UTC", 240),
-            "confirmation close 2026-11-07 04:00 UTC (candle opened 2026-11-07 00:00 UTC)",
+            "confirmation close 2026-11-06 23:00 EST (candle opened 2026-11-06 19:00 EST)",
         )
 
     def test_broken_support_uses_confirmation_close_and_candle_open(self):
@@ -80,12 +80,12 @@ class KeyLevelTests(unittest.TestCase):
                 {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "NEUTRAL"},
             )
         self.assertIn(
-            "$1.2460 (Daily, confirmation close 2026-11-05 16:00 UTC "
-            "(candle opened 2026-11-05 12:00 UTC))", result,
+            "$1.2460 (Daily, confirmation close 2026-11-05 11:00 EST "
+            "(candle opened 2026-11-05 07:00 EST))", result,
         )
         self.assertIn(
-            "$1.2333 (4H, confirmation close 2026-11-07 04:00 UTC "
-            "(candle opened 2026-11-07 00:00 UTC))", result,
+            "$1.2333 (4H, confirmation close 2026-11-06 23:00 EST "
+            "(candle opened 2026-11-06 19:00 EST))", result,
         )
         self.assertIn("short TF 1H bearish / 15m bearish / 5m neutral", result)
 
@@ -354,6 +354,7 @@ class InvalidationHistoryTests(unittest.TestCase):
             {"bias": "No Data"}, {"bias": "No Data"},
         )
         self.assertEqual(state["invalidation_history"]["1H"]["last_bias_shift"]["to"], "BULLISH")
+        self.assertIn("confirmation candle close $1.3100", text)
         self.assertIn("not a structural invalidation", text)
 
     def test_same_candle_does_not_create_duplicate_invalidation(self):
