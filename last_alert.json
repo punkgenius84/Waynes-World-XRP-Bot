@@ -551,14 +551,15 @@
       "last_checked_candle": "2026-11-07 05:00 UTC"
     },
     "15m": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-06 23:30 UTC",
-        "close": 1.1796
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-07 05:30 UTC",
+        "timestamp_basis": "close",
+        "close": 1.1585
       },
-      "last_checked_candle": "2026-11-07 05:15 UTC"
+      "last_checked_candle": "2026-11-07 05:30 UTC"
     },
     "5m": {
       "direction": "NEUTRAL",
@@ -569,7 +570,7 @@
         "timestamp_basis": "close",
         "close": 1.1547
       },
-      "last_checked_candle": "2026-11-07 05:25 UTC"
+      "last_checked_candle": "2026-11-07 05:30 UTC"
     }
   }
 }
