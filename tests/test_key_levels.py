@@ -4,7 +4,7 @@ import pandas as pd
 
 from combined_xrp_intel_report import (
     _format_swing_pair, _last_swing_dates, _range_width_pct, _recent_daily_range,
-    _structural_validation_lines, _uniq_levels, build_invalidation_status,
+    _structural_validation_lines, _uniq_levels, _validate_confirming_candle, build_invalidation_status,
     calculate_market_confidence, calculate_scalper_confidence, scalper_outlook,
 )
 
@@ -106,7 +106,12 @@ class InvalidationHistoryTests(unittest.TestCase):
         highs[20] = 1.60
         lows[25] = 1.10
         closes = [1.30] * periods
+        closes[-2] = close * 1.005
         closes[-1] = close
+        highs = [max(value, 1.40) for value in closes]
+        lows = [min(value, 1.20) for value in closes]
+        highs[20] = 1.60
+        lows[25] = 1.10
         return pd.DataFrame(
             {"open": closes, "high": highs, "low": lows, "close": closes, "volume": [1.0] * periods},
             index=index,
@@ -201,7 +206,8 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(event["direction"], "DOWNSIDE")
         self.assertEqual(event["boundary"], 1.10)
         self.assertEqual(event["close"], 1.09)
-        self.assertIn("4H RANGE (pivot pattern remains non-trending)", text)
+        self.assertIn("4H RANGE — pivot pattern remains non-trending; downside swing break active", text)
+        self.assertIn("broken boundary $1.1000; confirming candle close $1.0900", text)
         self.assertIn("price remains below broken boundary", text)
 
     def test_daily_range_upside_break_is_recorded_on_completed_4h_close(self):
@@ -337,6 +343,39 @@ class InvalidationHistoryTests(unittest.TestCase):
             state["invalidation_history"]["4H"]["last_invalidation"],
             previous_event,
         )
+
+    def test_large_4h_close_move_is_held_for_data_integrity_review(self):
+        frame = self._frame(close=1.15)
+        frame.iloc[-2, frame.columns.get_loc("close")] = 1.24
+        frame.iloc[-2, frame.columns.get_loc("open")] = 1.24
+        frame.iloc[-1, frame.columns.get_loc("open")] = 1.15
+        frame.iloc[-1, frame.columns.get_loc("high")] = 1.16
+        frame.iloc[-1, frame.columns.get_loc("low")] = 1.14
+        valid, reason = _validate_confirming_candle(frame)
+        self.assertFalse(valid)
+        self.assertIn("changed", reason)
+
+    def test_invalid_ohlc_is_held_for_data_integrity_review(self):
+        frame = self._frame(close=1.29)
+        frame.iloc[-1, frame.columns.get_loc("high")] = 1.20
+        valid, reason = _validate_confirming_candle(frame)
+        self.assertFalse(valid)
+        self.assertIn("high is inconsistent", reason)
+
+    def test_missing_4h_bucket_is_held_for_data_integrity_review(self):
+        frame = self._frame(close=1.29).drop(index=pd.Timestamp("2026-10-08 00:00:00+00:00"))
+        valid, reason = _validate_confirming_candle(frame)
+        self.assertFalse(valid)
+        self.assertIn("candle gap detected", reason)
+
+    def test_scalper_outlook_separates_direction_from_entry_quality(self):
+        result = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            19, {"dist_pct": 12.7}, 80,
+        )
+        self.assertIn("BEARISH", result["headline"])
+        self.assertIn("LOW", result["entry_quality"])
+        self.assertIn("avoid chasing", result["entry_quality"])
 
     def test_scalper_confidence_rewards_bearish_alignment(self):
         score, note = calculate_scalper_confidence(
