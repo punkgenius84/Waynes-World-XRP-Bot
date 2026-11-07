@@ -183,8 +183,26 @@ class InvalidationHistoryTests(unittest.TestCase):
         self.assertEqual(event["direction"], "DOWNSIDE")
         self.assertEqual(event["boundary"], 1.20)
         self.assertEqual(event["close"], 1.19)
-        self.assertIn("last confirmed range break: DOWNSIDE", text)
+        self.assertIn("last confirmed swing-range break: DOWNSIDE", text)
         self.assertIsNone(state["invalidation_history"]["Daily"]["last_invalidation"])
+
+    def test_four_hour_range_downside_break_is_recorded_on_completed_4h_close(self):
+        frame = self._frame(close=1.09)
+        state = {"invalidation_history": {"4H": {
+            "direction": "RANGE", "active_boundary": None,
+            "last_checked_candle": "old",
+        }}}
+        text = build_invalidation_status(
+            state, frame, frame, frame, frame, frame,
+            "Ranging/Choppy — Sideways", "Ranging/Choppy — Sideways",
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "NEUTRAL"},
+        )
+        event = state["invalidation_history"]["4H"]["last_range_break"]
+        self.assertEqual(event["direction"], "DOWNSIDE")
+        self.assertEqual(event["boundary"], 1.10)
+        self.assertEqual(event["close"], 1.09)
+        self.assertIn("4H RANGE (pivot pattern remains non-trending)", text)
+        self.assertIn("price remains below broken boundary", text)
 
     def test_daily_range_upside_break_is_recorded_on_completed_4h_close(self):
         frame = self._frame(close=1.61)
