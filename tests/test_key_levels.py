@@ -411,6 +411,32 @@ class InvalidationHistoryTests(unittest.TestCase):
             previous_event,
         )
 
+    def test_scalper_outlook_separates_direction_from_fresh_entry_quality(self):
+        high = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            19, {"dist_pct": 12.7}, 80,
+        )
+        self.assertEqual(high["headline"], "BEARISH — EXTENDED")
+        self.assertIn("LOW", high["entry_quality"])
+        self.assertIn("avoid chasing", high["entry_quality"])
+        self.assertIn("reset/retest", high["entry_quality"])
+
+        elevated = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "NEUTRAL"},
+            70, {"dist_pct": 50.0}, 70,
+        )
+        self.assertIn("BEARISH", elevated["headline"])
+        self.assertIn("CAUTIOUS", elevated["entry_quality"])
+        self.assertIn("pullback/retest", elevated["entry_quality"])
+
+        normal = scalper_outlook(
+            {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
+            40, {"dist_pct": 50.0}, 90,
+        )
+        self.assertEqual(normal["headline"], "BEARISH — ALIGNED")
+        self.assertIn("CONDITIONAL", normal["entry_quality"])
+        self.assertIn("not an entry trigger", normal["entry_quality"])
+
     def test_scalper_confidence_rewards_bearish_alignment(self):
         score, note = calculate_scalper_confidence(
             {"bias": "BEARISH"}, {"bias": "BEARISH"}, {"bias": "BEARISH"},
