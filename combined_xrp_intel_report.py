@@ -2141,12 +2141,22 @@ def scalper_outlook(
         else:
             five = sig5 or "Neutral"
 
+    # Direction can remain bearish/bullish while a stretched move is a poor
+    # fresh entry. Keep that execution-quality judgment separate from bias.
+    if ext == "High":
+        entry_quality = "LOW — highly extended; avoid chasing, wait for a reset/retest"
+    elif ext == "Elevated":
+        entry_quality = "CAUTIOUS — extended; wait for pullback/retest and defined risk"
+    else:
+        entry_quality = "CONDITIONAL — alignment is not an entry trigger; wait for a valid setup"
+
     return {
         "headline": headline,
         "align": align,
         "five": five,
         "extension": ext,
         "confidence": confidence,
+        "entry_quality": entry_quality,
     }
 
 
@@ -2634,8 +2644,9 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         name="⚡ Scalper Outlook",
         value=(
             f"**{scalp_out['headline']}**\n"
-            f"Setup Conviction (heuristic, not probability): {scalper_confidence}/100{scalp_note}\n"
+            f"Directional Alignment (heuristic, not probability): {scalper_confidence}/100{scalp_note}\n"
             f"{scalp_out['align']}\n"
+            f"Fresh-entry quality: {scalp_out['entry_quality']}\n"
             f"5m: {scalp_out['five']}\n"
             f"Extension: {scalp_out['extension']}"
         ),
