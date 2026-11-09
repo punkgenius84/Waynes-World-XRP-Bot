@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-09 04:00 UTC",
+      "last_checked_candle": "2026-11-09 12:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -529,7 +529,7 @@
         "close": 1.308,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-09 04:00 UTC",
+      "last_checked_candle": "2026-11-09 12:00 UTC",
       "active_range_low": 1.2333,
       "active_range_high": 1.34,
       "last_range_break": {
@@ -541,37 +541,37 @@
       }
     },
     "1H": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-08 17:00 UTC",
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-09 12:00 UTC",
         "timestamp_basis": "close",
-        "close": 1.154
+        "close": 1.0797
       },
-      "last_checked_candle": "2026-11-09 04:00 UTC"
+      "last_checked_candle": "2026-11-09 12:00 UTC"
     },
     "15m": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-08 17:45 UTC",
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-09 12:30 UTC",
         "timestamp_basis": "close",
-        "close": 1.1538
+        "close": 1.0934
       },
-      "last_checked_candle": "2026-11-09 04:30 UTC"
+      "last_checked_candle": "2026-11-09 12:30 UTC"
     },
     "5m": {
-      "direction": "BEARISH",
+      "direction": "BULLISH",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-09 04:40 UTC",
+        "from": "BEARISH",
+        "to": "BULLISH",
+        "at": "2026-11-09 12:40 UTC",
         "timestamp_basis": "close",
-        "close": 1.1077
+        "close": 1.1021
       },
-      "last_checked_candle": "2026-11-09 04:40 UTC"
+      "last_checked_candle": "2026-11-09 12:40 UTC"
     }
   }
 }
