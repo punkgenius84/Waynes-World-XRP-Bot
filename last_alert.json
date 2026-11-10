@@ -541,37 +541,37 @@
       }
     },
     "1H": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-10 12:00 UTC",
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-10 19:00 UTC",
         "timestamp_basis": "close",
-        "close": 1.078
+        "close": 1.071
       },
-      "last_checked_candle": "2026-11-10 16:00 UTC"
+      "last_checked_candle": "2026-11-10 19:00 UTC"
     },
     "15m": {
-      "direction": "BEARISH",
+      "direction": "BULLISH",
       "last_bias_shift": {
-        "from": "BULLISH",
-        "to": "BEARISH",
-        "at": "2026-11-10 12:15 UTC",
+        "from": "BEARISH",
+        "to": "BULLISH",
+        "at": "2026-11-10 19:30 UTC",
         "timestamp_basis": "close",
-        "close": 1.079
+        "close": 1.0677
       },
-      "last_checked_candle": "2026-11-10 16:00 UTC"
+      "last_checked_candle": "2026-11-10 19:30 UTC"
     },
     "5m": {
-      "direction": "BEARISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-10 16:10 UTC",
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-10 19:30 UTC",
         "timestamp_basis": "close",
-        "close": 1.0438
+        "close": 1.0678
       },
-      "last_checked_candle": "2026-11-10 16:10 UTC"
+      "last_checked_candle": "2026-11-10 19:30 UTC"
     }
   }
 }
