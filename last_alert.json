@@ -549,7 +549,7 @@
         "timestamp_basis": "close",
         "close": 1.0221
       },
-      "last_checked_candle": "2026-11-14 20:00 UTC"
+      "last_checked_candle": "2026-11-14 23:00 UTC"
     },
     "15m": {
       "direction": "BEARISH",
@@ -560,7 +560,7 @@
         "timestamp_basis": "close",
         "close": 0.9448
       },
-      "last_checked_candle": "2026-11-14 20:30 UTC"
+      "last_checked_candle": "2026-11-14 23:30 UTC"
     },
     "5m": {
       "direction": "BEARISH",
@@ -571,7 +571,7 @@
         "timestamp_basis": "close",
         "close": 0.9448
       },
-      "last_checked_candle": "2026-11-14 20:30 UTC"
+      "last_checked_candle": "2026-11-14 23:30 UTC"
     }
   }
 }
