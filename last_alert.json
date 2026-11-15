@@ -549,7 +549,7 @@
         "timestamp_basis": "close",
         "close": 0.9608
       },
-      "last_checked_candle": "2026-11-15 20:00 UTC"
+      "last_checked_candle": "2026-11-15 23:00 UTC"
     },
     "15m": {
       "direction": "BULLISH",
@@ -560,7 +560,7 @@
         "timestamp_basis": "close",
         "close": 0.9623
       },
-      "last_checked_candle": "2026-11-15 20:45 UTC"
+      "last_checked_candle": "2026-11-15 23:30 UTC"
     },
     "5m": {
       "direction": "BULLISH",
@@ -571,7 +571,7 @@
         "timestamp_basis": "close",
         "close": 0.9629
       },
-      "last_checked_candle": "2026-11-15 20:55 UTC"
+      "last_checked_candle": "2026-11-15 23:40 UTC"
     }
   }
 }
