@@ -2661,7 +2661,7 @@ def send_report(coin: str, hourly: pd.DataFrame, df_4h: pd.DataFrame, df_daily: 
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Crypto Intelligence • {price_src} • {now_est.strftime('%I:%M %p %Z')}")
+    embed.set_footer(text="⚠️ Not financial advice • Technical indicators only, not predictions • DYOR")
     embed.set_timestamp()
 
     discord_chart_paths = build_discord_chart_images(coin, df_daily, df_4h, hourly, df_15m)
