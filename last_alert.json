@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-20 04:00 UTC",
+      "last_checked_candle": "2026-11-20 12:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -529,7 +529,7 @@
         "close": 1.308,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-20 04:00 UTC",
+      "last_checked_candle": "2026-11-20 12:00 UTC",
       "active_range_low": 0.8922,
       "active_range_high": 1.34,
       "last_range_break": {
@@ -541,37 +541,37 @@
       }
     },
     "1H": {
-      "direction": "NEUTRAL",
-      "last_bias_shift": {
-        "from": "BEARISH",
-        "to": "NEUTRAL",
-        "at": "2026-11-20 01:00 UTC",
-        "timestamp_basis": "close",
-        "close": 0.9612
-      },
-      "last_checked_candle": "2026-11-20 05:00 UTC"
-    },
-    "15m": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "last_bias_shift": {
         "from": "NEUTRAL",
-        "to": "BULLISH",
-        "at": "2026-11-20 05:45 UTC",
+        "to": "BEARISH",
+        "at": "2026-11-20 12:00 UTC",
         "timestamp_basis": "close",
-        "close": 0.9655
+        "close": 0.9518
       },
-      "last_checked_candle": "2026-11-20 05:45 UTC"
+      "last_checked_candle": "2026-11-20 12:00 UTC"
+    },
+    "15m": {
+      "direction": "BEARISH",
+      "last_bias_shift": {
+        "from": "BULLISH",
+        "to": "BEARISH",
+        "at": "2026-11-20 12:30 UTC",
+        "timestamp_basis": "close",
+        "close": 0.9471
+      },
+      "last_checked_candle": "2026-11-20 12:30 UTC"
     },
     "5m": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "last_bias_shift": {
-        "from": "BEARISH",
-        "to": "BULLISH",
-        "at": "2026-11-19 22:55 UTC",
+        "from": "BULLISH",
+        "to": "BEARISH",
+        "at": "2026-11-20 12:40 UTC",
         "timestamp_basis": "close",
-        "close": 0.9592
+        "close": 0.9459
       },
-      "last_checked_candle": "2026-11-20 05:40 UTC"
+      "last_checked_candle": "2026-11-20 12:40 UTC"
     }
   }
 }
