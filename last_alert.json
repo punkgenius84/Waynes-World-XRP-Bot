@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-20 16:00 UTC",
+      "last_checked_candle": "2026-11-20 20:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -529,9 +529,9 @@
         "close": 1.308,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-20 16:00 UTC",
+      "last_checked_candle": "2026-11-20 20:00 UTC",
       "active_range_low": 0.8922,
-      "active_range_high": 1.34,
+      "active_range_high": 1.0073,
       "last_range_break": {
         "direction": "DOWNSIDE",
         "boundary": 1.2333,
@@ -541,37 +541,37 @@
       }
     },
     "1H": {
-      "direction": "BEARISH",
-      "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BEARISH",
-        "at": "2026-11-20 12:00 UTC",
-        "timestamp_basis": "close",
-        "close": 0.9518
-      },
-      "last_checked_candle": "2026-11-20 19:00 UTC"
-    },
-    "15m": {
-      "direction": "BEARISH",
-      "last_bias_shift": {
-        "from": "BULLISH",
-        "to": "BEARISH",
-        "at": "2026-11-20 12:30 UTC",
-        "timestamp_basis": "close",
-        "close": 0.9471
-      },
-      "last_checked_candle": "2026-11-20 19:45 UTC"
-    },
-    "5m": {
       "direction": "NEUTRAL",
       "last_bias_shift": {
         "from": "BEARISH",
         "to": "NEUTRAL",
-        "at": "2026-11-20 19:50 UTC",
+        "at": "2026-11-20 22:00 UTC",
         "timestamp_basis": "close",
-        "close": 0.8983
+        "close": 0.907
       },
-      "last_checked_candle": "2026-11-20 19:50 UTC"
+      "last_checked_candle": "2026-11-20 22:00 UTC"
+    },
+    "15m": {
+      "direction": "NEUTRAL",
+      "last_bias_shift": {
+        "from": "BEARISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-20 22:30 UTC",
+        "timestamp_basis": "close",
+        "close": 0.9127
+      },
+      "last_checked_candle": "2026-11-20 22:30 UTC"
+    },
+    "5m": {
+      "direction": "BULLISH",
+      "last_bias_shift": {
+        "from": "NEUTRAL",
+        "to": "BULLISH",
+        "at": "2026-11-20 22:30 UTC",
+        "timestamp_basis": "close",
+        "close": 0.9127
+      },
+      "last_checked_candle": "2026-11-20 22:30 UTC"
     }
   }
 }
