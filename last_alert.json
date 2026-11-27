@@ -507,7 +507,7 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-27 00:00 UTC",
+      "last_checked_candle": "2026-11-27 04:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
@@ -530,7 +530,7 @@
         "close": 0.9367,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-27 00:00 UTC",
+      "last_checked_candle": "2026-11-27 04:00 UTC",
       "active_range_low": 0.859,
       "active_range_high": 1.0251,
       "last_range_break": {
@@ -551,7 +551,7 @@
         "timestamp_basis": "close",
         "close": 0.9482
       },
-      "last_checked_candle": "2026-11-27 02:00 UTC"
+      "last_checked_candle": "2026-11-27 06:00 UTC"
     },
     "15m": {
       "direction": "BULLISH",
@@ -562,18 +562,18 @@
         "timestamp_basis": "close",
         "close": 0.9609
       },
-      "last_checked_candle": "2026-11-27 02:30 UTC"
+      "last_checked_candle": "2026-11-27 06:45 UTC"
     },
     "5m": {
-      "direction": "BULLISH",
+      "direction": "NEUTRAL",
       "last_bias_shift": {
-        "from": "NEUTRAL",
-        "to": "BULLISH",
-        "at": "2026-11-27 02:30 UTC",
+        "from": "BULLISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-27 06:45 UTC",
         "timestamp_basis": "close",
-        "close": 0.9609
+        "close": 0.9693
       },
-      "last_checked_candle": "2026-11-27 02:30 UTC"
+      "last_checked_candle": "2026-11-27 06:45 UTC"
     }
   }
 }
