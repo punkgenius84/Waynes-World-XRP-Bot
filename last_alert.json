@@ -507,14 +507,14 @@
       "active_boundary": null,
       "last_invalidation": null,
       "last_structure_change": null,
-      "last_checked_candle": "2026-11-28 00:00 UTC",
+      "last_checked_candle": "2026-11-28 04:00 UTC",
       "active_range_low": 1.246,
       "active_range_high": 1.6581,
       "last_range_break": {
         "direction": "DOWNSIDE",
-        "boundary": 1.2474,
-        "close": 0.948,
-        "at": "2026-11-28 00:00 UTC",
+        "boundary": 1.246,
+        "close": 0.9492,
+        "at": "2026-11-28 04:00 UTC",
         "timestamp_basis": "close",
         "confirmation": "4H candle close"
       }
@@ -531,7 +531,7 @@
         "close": 0.9367,
         "note": "label transition; prior boundary not breached"
       },
-      "last_checked_candle": "2026-11-28 00:00 UTC",
+      "last_checked_candle": "2026-11-28 04:00 UTC",
       "active_range_low": 0.8877,
       "active_range_high": 1.0251,
       "last_range_break": {
@@ -544,26 +544,26 @@
       }
     },
     "1H": {
-      "direction": "NEUTRAL",
-      "last_bias_shift": {
-        "from": "BEARISH",
-        "to": "NEUTRAL",
-        "at": "2026-11-28 02:00 UTC",
-        "timestamp_basis": "close",
-        "close": 0.9532
-      },
-      "last_checked_candle": "2026-11-28 02:00 UTC"
-    },
-    "15m": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "last_bias_shift": {
         "from": "NEUTRAL",
-        "to": "BULLISH",
-        "at": "2026-11-28 02:15 UTC",
+        "to": "BEARISH",
+        "at": "2026-11-28 06:00 UTC",
         "timestamp_basis": "close",
-        "close": 0.9544
+        "close": 0.9455
       },
-      "last_checked_candle": "2026-11-28 02:15 UTC"
+      "last_checked_candle": "2026-11-28 06:00 UTC"
+    },
+    "15m": {
+      "direction": "NEUTRAL",
+      "last_bias_shift": {
+        "from": "BULLISH",
+        "to": "NEUTRAL",
+        "at": "2026-11-28 06:15 UTC",
+        "timestamp_basis": "close",
+        "close": 0.9454
+      },
+      "last_checked_candle": "2026-11-28 06:15 UTC"
     },
     "5m": {
       "direction": "NEUTRAL",
@@ -574,7 +574,7 @@
         "timestamp_basis": "close",
         "close": 0.9528
       },
-      "last_checked_candle": "2026-11-28 02:20 UTC"
+      "last_checked_candle": "2026-11-28 06:20 UTC"
     }
   }
 }
